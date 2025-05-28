@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using TMPro;
-using UnityEngine.UI; // ← ★★★この行を確認・追加してください★★★
+using UnityEngine.UI;
 
 public class WordSelectionManager : MonoBehaviour
 {
@@ -30,8 +30,9 @@ public class WordSelectionManager : MonoBehaviour
 
     private int cardsSelectedByGenji = 0;
     private int cardsSelectedByHeishi = 0;
-    private const int CARDS_TO_SELECT_PER_TEAM = 45;
-    private const int TOTAL_CARDS_TO_LOCK_REMAINING = 90; // この枚数に達したら残りをロック
+
+    //private const int CARDS_TO_SELECT_PER_TEAM = 45;
+    private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 90; // この枚数に達したら残りをロック
 
 
     [Header("取得枚数表示UI")]
@@ -41,7 +42,7 @@ public class WordSelectionManager : MonoBehaviour
     [Header("Undo機能関連")]
     public Button undoButton; // Inspectorで「一手戻す」ボタンを設定
 
-        // ★↓ここからUndo機能のための変数を追加または確認↓★
+    // ★↓ここからUndo機能のための変数を追加または確認↓★
     [Header("Undo機能関連（Inspector設定不要）")] // UndoボタンはPlayerSetupManager側にある想定でしたね
     private WordCardUI lastConfirmedCard = null;    // 直前に「確定」された札を覚えておく
     private int lastConfirmedCardTeamIndex = -1; // 直前に札を「確定」したチームのインデックス
@@ -95,9 +96,9 @@ public class WordSelectionManager : MonoBehaviour
         int totalSelectedCards = cardsSelectedByGenji + cardsSelectedByHeishi;
         Debug.Log($"現在の合計選択枚数: {totalSelectedCards}枚");
 
-        if (totalSelectedCards >= TOTAL_CARDS_TO_LOCK_REMAINING)
+        if (totalSelectedCards >= TOTAL_CARDS_TO_TRIGGER_LOCK)
         {
-            Debug.Log($"合計選択枚数が{TOTAL_CARDS_TO_LOCK_REMAINING}枚に達しました。残りの未選択の札を全てロックします。");
+            Debug.Log($"合計選択枚数が{TOTAL_CARDS_TO_TRIGGER_LOCK}枚に達しました。残りの未選択の札を全てロックします。");
             SetAllUnselectedCardsInteractable(false); // ★新しいヘルパー関数を呼び出す★
 
             // ターン表示なども「札選択終了」などに変更しても良い
@@ -110,8 +111,6 @@ public class WordSelectionManager : MonoBehaviour
         }
         // ★↑ここまで↑★
 
-
-
         UpdateOverallTurnDisplay();
         UpdateCurrentSelectingPlayerNameDisplay();
         UpdateCardsSelectedDisplay(); // ★追加：初期表示のため★
@@ -120,9 +119,9 @@ public class WordSelectionManager : MonoBehaviour
         PlayerSetupManager psm = FindObjectOfType<PlayerSetupManager>(); // PlayerSetupManagerを探す
         if (psm != null && psm.undoCardSelectionButton != null)
         {
-            psm.undoCardSelectionButton.interactable = false; 
+            psm.undoCardSelectionButton.interactable = false;
         }
-        lastConfirmedCard = null; 
+        lastConfirmedCard = null;
         lastConfirmedCardTeamIndex = -1;
         // ★↑ここまで↑★
         Debug.Log("WordSelectionManager: 札の生成と初期設定完了。");
@@ -150,8 +149,6 @@ public class WordSelectionManager : MonoBehaviour
         if (clickedCard == null || clickedCard.IsSelectedByTeam()) return;
         Debug.Log($"WordSelectionManager: 札「{clickedCard.GetCardNumber()}」クリック。選択中: {(currentlyHighlightedCard != null ? currentlyHighlightedCard.GetCardNumber() : "なし")}");
 
-        // public Transform enlargedCardHolder; // ← この変数はもう使いません (宣言から削除してもOK)
-
         if (currentlyHighlightedCard == null) // Case 1: まだ何も拡大されていない
         {
             currentlyHighlightedCard = clickedCard;
@@ -176,7 +173,7 @@ public class WordSelectionManager : MonoBehaviour
             lastConfirmedCardTeamIndex = currentPlayerTurnTeamIndex; // どのチームが確定したか
             previousGenjiPlayerSelectIndex = currentGenjiPlayerSelectIndex; // 確定した時の源氏の順番
             previousHeishiPlayerSelectIndex = currentHeishiPlayerSelectIndex; // 確定した時の平氏の順番
-            
+
             // ★↓Undoのための情報を記録し、Undoボタンを押せるようにする↓★
             lastConfirmedCard = clickedCard;
             lastConfirmedCardTeamIndex = currentPlayerTurnTeamIndex;
@@ -188,8 +185,6 @@ public class WordSelectionManager : MonoBehaviour
             {
                 psm.undoCardSelectionButton.interactable = true; // ★Undoボタンを押せるようにする★
             }
-            // ★↑ここまで↑★
-
 
             if (currentPlayerTurnTeamIndex == 0) cardsSelectedByGenji++;
             else cardsSelectedByHeishi++;
@@ -197,19 +192,31 @@ public class WordSelectionManager : MonoBehaviour
             UpdateCardsSelectedDisplay(); // ★追加：札獲得後に表示を更新★
             currentlyHighlightedCard = null;
 
-            // ... (終了条件チェックとターン交代はそのまま) ...
-            if ((currentPlayerTurnTeamIndex == 0 && cardsSelectedByGenji >= CARDS_TO_SELECT_PER_TEAM) &&
-                (currentPlayerTurnTeamIndex == 1 && cardsSelectedByHeishi >= CARDS_TO_SELECT_PER_TEAM) ||
-                (cardsSelectedByGenji + cardsSelectedByHeishi >= WordDataManager.Instance.SelectableWordsList.Count - 10))
+            // ★↓ここから終了条件の判定を「合計90枚選択」のみにします↓★
+            int totalSelectedCardsNow = cardsSelectedByGenji + cardsSelectedByHeishi;
+            Debug.Log($"現在の合計選択枚数: {totalSelectedCardsNow}枚");
+
+            // TOTAL_CARDS_TO_TRIGGER_LOCK はクラスの変数宣言部分で 
+            // private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 90; と定義されているはずです。
+            if (totalSelectedCardsNow >= TOTAL_CARDS_TO_TRIGGER_LOCK) 
             {
-                // ... (終了処理) ...
-                return;
+                Debug.Log($"合計選択枚数が{TOTAL_CARDS_TO_TRIGGER_LOCK}枚に達しました。札選択フェイズ終了。残りの札をロックします。");
+                SetAllUnselectedCardsInteractable(false); // 残りの札（空札のはず）をロック
+                
+                if (overallTurnTextDisplay != null) overallTurnTextDisplay.text = "札選択終了";
+                if (currentSelectingPlayerNameDisplayText != null) currentSelectingPlayerNameDisplayText.text = "";
+                
+                // ここで次のフェイズ（クイズ解答フェイズ）へ移行する処理を呼び出す
+                // GoToQuizPhase(); 
+                return; // ターン交代は行わない
             }
-            SwitchToNextPlayerAndTurn();
+            // ★↑ここまで終了条件の判定を修正↑★
+            
+            SwitchToNextPlayerAndTurn(); // まだ終了していなければターンを交代する
         }
     }
-
-    void UpdateOverallTurnDisplay()
+            
+    　　　void UpdateOverallTurnDisplay()
     {
         if (overallTurnTextDisplay != null)
         {
@@ -368,7 +375,7 @@ public class WordSelectionManager : MonoBehaviour
         Debug.Log($"取得枚数表示を更新。源氏:{cardsSelectedByGenji}枚, 平氏:{cardsSelectedByHeishi}枚");
     }
     // 「一手戻す」ボタンが押された時のお仕事
-// 「一手戻す」ボタンが押された時に、PlayerSetupManagerなどから呼び出されるお仕事
+    // 「一手戻す」ボタンが押された時に、PlayerSetupManagerなどから呼び出されるお仕事
     public void OnUndoButtonClicked()
     {
         if (lastConfirmedCard == null || lastConfirmedCardTeamIndex == -1)
@@ -376,9 +383,9 @@ public class WordSelectionManager : MonoBehaviour
             Debug.LogWarning("WordSelectionManager: Undoできる操作がありません。");
             // ★↓ここでUndoボタンを無効化するのは、Undoできるものが無くなった時なので適切↓★
             PlayerSetupManager psm = FindObjectOfType<PlayerSetupManager>();
-            if (psm != null && psm.undoCardSelectionButton != null) 
+            if (psm != null && psm.undoCardSelectionButton != null)
             {
-                psm.undoCardSelectionButton.interactable = false; 
+                psm.undoCardSelectionButton.interactable = false;
             }
             // ★↑ここまで↑★
             return;
@@ -388,7 +395,7 @@ public class WordSelectionManager : MonoBehaviour
 
         // 1. 直前に確定された札の WordCardUI を取得し、選択状態をリセットする
         lastConfirmedCard.ResetToUnselectedState(); // WordCardUIにリセットをお任せ (元の色、スケール、interactable=true になるはず)
-        
+
 
         // 2. その札を獲得したチームの獲得枚数を1つ減らす
         if (lastConfirmedCardTeamIndex == 0) // 源氏軍が取った札だったら
@@ -399,32 +406,33 @@ public class WordSelectionManager : MonoBehaviour
         {
             if (cardsSelectedByHeishi > 0) cardsSelectedByHeishi--;
         }
-         UpdateCardsSelectedDisplay(); // 取得枚数表示を更新 (これも忘れずに！)
+        UpdateCardsSelectedDisplay(); // 取得枚数表示を更新 (これも忘れずに！)
 
         // 3. ターンとプレイヤーのインデックスを、その札を選択した「前」の状態に戻す
         currentPlayerTurnTeamIndex = lastConfirmedCardTeamIndex; // 札を取ったチームのターンに戻す
         currentGenjiPlayerSelectIndex = previousGenjiPlayerSelectIndex; // 覚えておいたインデックスに戻す
         currentHeishiPlayerSelectIndex = previousHeishiPlayerSelectIndex; // 覚えておいたインデックスに戻す
-        
+
         // 4. 画面上のターン表示と、現在選択中のプレイヤー名表示を更新する
-        UpdateOverallTurnDisplay(); 
-        UpdateCurrentSelectingPlayerNameDisplay(); 
+        UpdateOverallTurnDisplay();
+        UpdateCurrentSelectingPlayerNameDisplay();
 
         // 5. Undo情報をクリアし、次のUndoに備える (連続Undoを許容しないならここでUndoボタンを無効化)
         Debug.Log($"Undo処理: lastConfirmedCard ({lastConfirmedCard.GetCardNumber()}) の情報をクリアします。");
         lastConfirmedCard = null;
         lastConfirmedCardTeamIndex = -1;
-                // ★↓Undo情報をクリアしたら、Undoボタンは押せないようにする↓★
+        // ★↓Undo情報をクリアしたら、Undoボタンは押せないようにする↓★
         PlayerSetupManager psmAfterUndo = FindObjectOfType<PlayerSetupManager>(); // 再度取得
         if (psmAfterUndo != null && psmAfterUndo.undoCardSelectionButton != null)
         {
-            psmAfterUndo.undoCardSelectionButton.interactable = false; 
+            psmAfterUndo.undoCardSelectionButton.interactable = false;
         }
         // ★↑ここまで↑★
 
         Debug.Log("★★ WordSelectionManager: Undo処理完了 ★★");
     }
     // まだチームに選択されていない全ての札の操作可否を設定するお仕事
+
     void SetAllUnselectedCardsInteractable(bool interactable)
     {
         if (cardGridParent == null)
@@ -432,14 +440,11 @@ public class WordSelectionManager : MonoBehaviour
             Debug.LogError("SetAllUnselectedCardsInteractable: cardGridParentが未設定です！");
             return;
         }
-
         Debug.Log($"全ての未選択の札を {(interactable ? "選択可能" : "選択不可")} にします。");
-
-        // CardGridの子になっている全ての札（WordCardUI）を取得して処理する
         foreach (Transform cardTransform in cardGridParent)
         {
             WordCardUI card = cardTransform.GetComponent<WordCardUI>();
-            if (card != null && !card.IsSelectedByTeam()) // まだチームに選択されていない札であれば
+            if (card != null && !card.IsSelectedByTeam()) 
             {
                 Button btn = card.GetComponent<Button>();
                 if (btn != null)
@@ -449,5 +454,4 @@ public class WordSelectionManager : MonoBehaviour
             }
         }
     }
-
 }
