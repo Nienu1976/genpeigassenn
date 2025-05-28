@@ -1,0 +1,187 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+using UnityEngine.EventSystems;
+using System.Collections.Generic; // ← ★★★この行を確認・追加してください★★★
+
+public class WordCardUI : MonoBehaviour, IPointerClickHandler
+{
+    [Header("UI部品（インスペクターで設定）")]
+    public TextMeshProUGUI cardNumberText;
+    public TextMeshProUGUI wordColumn1_Right;
+    public TextMeshProUGUI wordColumn2_Center;
+    public TextMeshProUGUI wordColumn3_Left;
+    public Image cardBackgroundImage;
+    public Button cardButton; // クリックを検知し、interactableを制御するために使う
+
+    [Header("表示設定（インスペクターで設定）")]
+    public int charsPerColumn = 5;
+
+    private WordSelectionManager selectionManager;
+    private bool isTeamSelected = false;
+    private string storedWord = "";
+    private string storedNumber = "";
+    private Vector3 initialScale;
+    private Canvas cardCanvas;
+    private int originalSortOrder;
+    private const int HIGHLIGHT_SORT_ORDER_OFFSET = 10; // 拡大表示時に加算するソート順
+
+    private Color originalBackgroundColor; // ★追加★ 元の背景色を覚えておく
+
+    //private Transform originalParent;       // この札の元の親（CardGridのはず）を覚えておく箱
+    //private int originalSiblingIndex;     // この札の元の並び順を覚えておく箱
+
+
+    void Awake()
+    {
+        // 参照を自分や子から取得 (Inspector設定漏れ対策)
+        if (cardBackgroundImage == null) cardBackgroundImage = GetComponentInChildren<Image>(true); // 非アクティブなものも含む
+        if (cardButton == null) cardButton = GetComponent<Button>();
+        if (cardNumberText == null)
+        {
+            Transform numTextTransform = transform.Find("CardNumberText"); // 仮の名前
+            if (numTextTransform != null) cardNumberText = numTextTransform.GetComponent<TextMeshProUGUI>();
+        }
+        // wordColumn も同様に transform.Find で探す処理を追加しても良い
+
+        selectionManager = FindObjectOfType<WordSelectionManager>();
+        if (selectionManager == null) Debug.LogError("WordCardUI: WordSelectionManagerが見つかりませんでした！", gameObject);
+
+        initialScale = transform.localScale;
+
+        // ★↓この札自身のCanvasコンポーネントを取得し、設定する↓★
+        cardCanvas = GetComponent<Canvas>();
+        if (cardCanvas == null)
+        {
+            // もしCanvasコンポーネントがアタッチされていなければ、ここで追加する
+            cardCanvas = gameObject.AddComponent<Canvas>();
+            // Canvasを追加したら、GraphicRaycasterも必要になることが多いので追加
+            if (GetComponent<GraphicRaycaster>() == null)
+            {
+                gameObject.AddComponent<GraphicRaycaster>();
+            }
+            Debug.LogWarning($"WordCardUI ({gameObject.name}): Canvasコンポーネントがなかったので追加しました。Inspectorで「ソート順をオーバーライド」にチェックを入れ、初期の「ソート順」を設定してください。");
+        }
+
+        if (cardCanvas != null)
+        {
+            cardCanvas.overrideSorting = false; //
+            originalSortOrder = cardCanvas.sortingOrder; // ★現在のソート順を「元のソート順」として覚えておく★
+        }
+        // ★↑ここまで追加↑★
+
+        if (cardCanvas != null)
+        {
+            cardCanvas.overrideSorting = true; // 最初からオーバーライドを有効にしておく
+            originalSortOrder = cardCanvas.sortingOrder; // 初期ソート順を記憶
+        }
+                if (cardBackgroundImage != null)
+        {
+            originalBackgroundColor = cardBackgroundImage.color; // ★初期の背景色を記憶★
+        }
+    }
+
+    public void SetCardData(string number, string word) {
+        storedNumber = number;
+        storedWord = word;
+        if (cardNumberText != null) cardNumberText.text = number;
+        ClearWordColumns();
+        if (string.IsNullOrEmpty(word) || charsPerColumn <= 0) return;
+        List<TextMeshProUGUI> columns = new List<TextMeshProUGUI>();
+        if (wordColumn1_Right != null) columns.Add(wordColumn1_Right);
+        if (wordColumn2_Center != null) columns.Add(wordColumn2_Center);
+        if (wordColumn3_Left != null) columns.Add(wordColumn3_Left);
+        if (columns.Count == 0) return;
+        int currentColumnIndex = 0; string currentColumnText = ""; int charCount = 0;
+        for (int i = 0; i < word.Length; i++) {
+            currentColumnText += word[i] + "\n"; charCount++;
+            if (charCount >= charsPerColumn || i == word.Length - 1) {
+                if (currentColumnText.Length > 0 && currentColumnText.EndsWith("\n")) {
+                    currentColumnText = currentColumnText.Substring(0, currentColumnText.Length - 1);
+                }
+                if (currentColumnIndex < columns.Count && columns[currentColumnIndex] != null) {
+                    columns[currentColumnIndex].text = currentColumnText;
+                }
+                currentColumnIndex++; currentColumnText = ""; charCount = 0;
+                if (currentColumnIndex >= columns.Count && i < word.Length - 1) break;
+            }
+        }
+    }
+
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        if (isTeamSelected) return;
+        if (selectionManager != null) {
+            selectionManager.OnCardClicked(this);
+        }
+    }
+
+    public void SetSelectedByTeam(Color teamColor)
+    {
+        if (cardBackgroundImage != null) cardBackgroundImage.color = teamColor;
+        isTeamSelected = true;
+        if (cardButton != null) cardButton.interactable = false;
+
+        // 選択が確定したら、元のソート順に戻し、拡大も解除
+        if (cardCanvas != null) {
+            cardCanvas.sortingOrder = originalSortOrder;
+        }
+        transform.localScale = initialScale; // 大きさも元に戻す
+        Debug.Log($"札「{GetCardNumber()}」がチーム色({teamColor})に変更、選択不可。ソート順もリセット。");
+    }
+
+    // WordSelectionManagerから呼び出される、選択中の拡大表示と手前表示を行う
+    // ★↓引数から Transform newParentOrGrid を削除し、Canvasのソート順を変更する処理を追加↓★
+    public void SetHighlighted(bool highlight, float scaleFactor) 
+    {
+        if (isTeamSelected && highlight) return; 
+        if (cardCanvas == null) { 
+            Debug.LogError($"SetHighlighted: {gameObject.name} の cardCanvasがnullです！Awakeで正しく設定されているか確認してください。"); 
+            return; 
+        }
+
+        if (highlight) // 拡大表示し、手前に持ってくる
+        {
+            transform.localScale = initialScale * scaleFactor;
+             cardCanvas.overrideSorting = true; // ★追加
+            cardCanvas.sortingOrder = originalSortOrder + HIGHLIGHT_SORT_ORDER_OFFSET; // ★元のソート順にオフセットを加えて手前に★
+            Debug.Log($"札「{GetCardNumber()}」を拡大、ソート順を {cardCanvas.sortingOrder} に。");
+        }
+        else // 元の大きさと表示順に戻す
+        {
+            transform.localScale = initialScale;
+            cardCanvas.overrideSorting = false; // ★追加
+
+            cardCanvas.sortingOrder = originalSortOrder; // ★元のソート順に戻す★
+            Debug.Log($"札「{GetCardNumber()}」を通常表示、ソート順を {cardCanvas.sortingOrder} に。");
+        }
+    }
+    // ★↑ここまで修正↑★         
+    public bool IsSelectedByTeam() { return isTeamSelected; }
+    public string GetCardNumber() { return storedNumber; }
+    public string GetWord() { return storedWord; }
+    private void ClearWordColumns() { if (wordColumn1_Right != null) wordColumn1_Right.text = ""; if (wordColumn2_Center != null) wordColumn2_Center.text = ""; if (wordColumn3_Left != null) wordColumn3_Left.text = ""; }
+    public void ResetToUnselectedState()
+    {
+        Debug.Log($"WordCardUI ({gameObject.name}): 選択状態をリセットします。");
+        isTeamSelected = false; 
+
+        if (cardBackgroundImage != null)
+        {
+            cardBackgroundImage.color = originalBackgroundColor; // ★記憶しておいた元の背景色に戻す★
+        }
+        if (cardButton != null)
+        {
+            cardButton.interactable = true; 
+        }
+        transform.localScale = initialScale; // ★記憶しておいた元の大きさに戻す★
+        
+        if (cardCanvas != null) {
+            cardCanvas.overrideSorting = false; 
+            cardCanvas.sortingOrder = originalSortOrder; 
+        }
+        SetHighlighted(false, 1f); // 念のため、拡大表示も解除
+    }
+    // ★↑ここまで↑★
+    }        
+
