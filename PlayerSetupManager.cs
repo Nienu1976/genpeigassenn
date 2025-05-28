@@ -15,9 +15,11 @@ public class PlayerSetupManager : MonoBehaviour
     [Header("UIボタン")]
     public Button goToCardSelectButton;
     public Button returnToDataLoadButton;
+    public Button undoCardSelectionButton; // ★追加★ 札選択画面で使う「一手戻す」ボタン
+
 
     [Header("参加人数選択UI")]
-    public TMP_Dropdown genjiPlayerCountDropdown; 
+    public TMP_Dropdown genjiPlayerCountDropdown;
     public TMP_Dropdown heishiPlayerCountDropdown;
 
     [Header("上限解答数入力UI")]
@@ -26,7 +28,7 @@ public class PlayerSetupManager : MonoBehaviour
 
     [Header("源氏軍プレイヤーUIリスト")]
     public List<TMP_InputField> genjiPlayerNameInputs;
-    public List<TextMeshProUGUI> genjiPlayerRoleTexts;  
+    public List<TextMeshProUGUI> genjiPlayerRoleTexts;
 
     [Header("平氏軍プレイヤーUIリスト")]
     public List<TMP_InputField> heishiPlayerNameInputs;
@@ -36,9 +38,9 @@ public class PlayerSetupManager : MonoBehaviour
     public string leaderRoleName = "総大将";
     public string memberRoleName = "武将";
 
-    private int maxGenjiPlayersUI; 
+    private int maxGenjiPlayersUI;
     private int maxHeishiPlayersUI;
-    
+
     void Start()
     {
         Debug.Log("PlayerSetupManager: Start() が呼び出されました。");
@@ -46,13 +48,13 @@ public class PlayerSetupManager : MonoBehaviour
 
         if (goToCardSelectButton != null) goToCardSelectButton.onClick.AddListener(OnGoToCardSelectButtonClicked);
         if (returnToDataLoadButton != null) returnToDataLoadButton.onClick.AddListener(OnReturnToDataLoadButtonClicked);
-        
+
         maxGenjiPlayersUI = (genjiPlayerNameInputs != null) ? genjiPlayerNameInputs.Count : 0;
         maxHeishiPlayersUI = (heishiPlayerNameInputs != null) ? heishiPlayerNameInputs.Count : 0;
 
-        if (genjiPlayerCountDropdown != null) 
+        if (genjiPlayerCountDropdown != null)
         {
-            SetupPlayerCountDropdown(genjiPlayerCountDropdown, maxGenjiPlayersUI); 
+            SetupPlayerCountDropdown(genjiPlayerCountDropdown, maxGenjiPlayersUI);
             genjiPlayerCountDropdown.onValueChanged.AddListener(delegate { UpdatePlayerUIBasedOnDropdown(); });
         }
         if (heishiPlayerCountDropdown != null)
@@ -60,7 +62,15 @@ public class PlayerSetupManager : MonoBehaviour
             SetupPlayerCountDropdown(heishiPlayerCountDropdown, maxHeishiPlayersUI);
             heishiPlayerCountDropdown.onValueChanged.AddListener(delegate { UpdatePlayerUIBasedOnDropdown(); });
         }
-        UpdatePlayerUIBasedOnDropdown(); 
+        UpdatePlayerUIBasedOnDropdown();
+
+        if (undoCardSelectionButton != null)
+        {
+            undoCardSelectionButton.onClick.AddListener(OnUndoCardSelectionButtonClicked);
+            //undoCardSelectionButton.gameObject.SetActive(false); // 最初は非表示、または押せないように
+            undoCardSelectionButton.interactable = false;      // ← interactableの初期設定はここで行う
+
+        }
     }
 
     void ValidateInspectorReferences_PSM()
@@ -89,24 +99,26 @@ public class PlayerSetupManager : MonoBehaviour
         dropdown.AddOptions(options);
         if (options.Count > 0) { dropdown.value = options.Count - 1; dropdown.RefreshShownValue(); }
     }
-    
+
     // ★★★↓この関数が、ドロップダウンの値が変わった時に呼ばれ、UIを更新します↓★★★
     public void UpdatePlayerUIBasedOnDropdown() // public に変更して DataLoadController からも呼べるように
     {
-        int genjiTargetCount = maxGenjiPlayersUI; 
-        if (genjiPlayerCountDropdown != null && genjiPlayerCountDropdown.options.Count > 0) {
+        int genjiTargetCount = maxGenjiPlayersUI;
+        if (genjiPlayerCountDropdown != null && genjiPlayerCountDropdown.options.Count > 0)
+        {
             string selectedText = genjiPlayerCountDropdown.options[genjiPlayerCountDropdown.value].text;
             int.TryParse(selectedText.Replace("人", ""), out genjiTargetCount);
             genjiTargetCount = Mathf.Clamp(genjiTargetCount, 1, maxGenjiPlayersUI);
         }
 
         int heishiTargetCount = maxHeishiPlayersUI;
-        if (heishiPlayerCountDropdown != null && heishiPlayerCountDropdown.options.Count > 0) {
+        if (heishiPlayerCountDropdown != null && heishiPlayerCountDropdown.options.Count > 0)
+        {
             string selectedText = heishiPlayerCountDropdown.options[heishiPlayerCountDropdown.value].text;
             int.TryParse(selectedText.Replace("人", ""), out heishiTargetCount);
             heishiTargetCount = Mathf.Clamp(heishiTargetCount, 1, maxHeishiPlayersUI);
         }
-        
+
         Debug.Log($"UI更新指示。源氏ターゲット: {genjiTargetCount}人, 平氏ターゲット: {heishiTargetCount}人");
         UpdateTeamUIVisibility("源氏軍", genjiTargetCount, genjiPlayerNameInputs, genjiPlayerRoleTexts);
         UpdateTeamUIVisibility("平氏軍", heishiTargetCount, heishiPlayerNameInputs, heishiPlayerRoleTexts);
@@ -116,17 +128,23 @@ public class PlayerSetupManager : MonoBehaviour
     // ★★★↓この関数が、実際のUIの表示/非表示と役職テキストの設定を行います↓★★★
     void UpdateTeamUIVisibility(string teamNameForLog, int targetCount, List<TMP_InputField> nameInputs, List<TextMeshProUGUI> roleTexts)
     {
-        if (nameInputs != null) {
-            for (int i = 0; i < nameInputs.Count; i++) {
+        if (nameInputs != null)
+        {
+            for (int i = 0; i < nameInputs.Count; i++)
+            {
                 if (nameInputs[i] != null) nameInputs[i].gameObject.SetActive(i < targetCount);
             }
         }
-        if (roleTexts != null) {
-            for (int i = 0; i < roleTexts.Count; i++) {
-                if (roleTexts[i] != null) {
+        if (roleTexts != null)
+        {
+            for (int i = 0; i < roleTexts.Count; i++)
+            {
+                if (roleTexts[i] != null)
+                {
                     bool shouldBeActive = (i < targetCount);
                     roleTexts[i].gameObject.SetActive(shouldBeActive);
-                    if (shouldBeActive) {
+                    if (shouldBeActive)
+                    {
                         roleTexts[i].text = (i == 0) ? leaderRoleName : memberRoleName;
                         if (i != 0 && string.IsNullOrEmpty(memberRoleName)) roleTexts[i].gameObject.SetActive(false);
                     }
@@ -136,7 +154,7 @@ public class PlayerSetupManager : MonoBehaviour
         Debug.Log($"{teamNameForLog} の名前入力欄と役職表示を {targetCount}人分更新。");
     }
     // ★★★↑ここまで↑★★★
-    
+
     public void OnGoToCardSelectButtonClicked()
     {
         Debug.Log("「札選択へ進む」ボタンが押されました。");
@@ -151,14 +169,51 @@ public class PlayerSetupManager : MonoBehaviour
         else { Debug.LogError("PSM: WordDataManagerが見つかりません！"); return; }
 
         if (playerSetupCanvasObject != null) playerSetupCanvasObject.SetActive(false);
-        if (cardSelectionCanvasObject != null) {
+        if (cardSelectionCanvasObject != null)
+        {
             cardSelectionCanvasObject.SetActive(true);
             WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
             if (wordSelector != null) { wordSelector.InitializeAndDisplayCards(); }
             else { Debug.LogError("PSM: WordSelectionManagerが見つかりません！"); }
         }
+        if (cardSelectionCanvasObject != null)
+        {
+            cardSelectionCanvasObject.SetActive(true);
+            // ... (WordSelectionManagerの初期化呼び出し) ...
+            if (undoCardSelectionButton != null) // ★追加★
+            {
+                undoCardSelectionButton.gameObject.SetActive(true); // Undoボタンを表示
+                //undoCardSelectionButton .interactable = false; // ただし、最初は押せない
+            }
+        }
     }
 
     List<string> GetPlayerNamesFromInputs(List<TMP_InputField> inputFields, int countToGet) { List<string> names = new List<string>(); if (inputFields == null) return names; for (int i = 0; i < Mathf.Min(countToGet, inputFields.Count); i++) { if (inputFields[i] != null && !string.IsNullOrEmpty(inputFields[i].text)) { names.Add(inputFields[i].text); } else { names.Add($"プレイヤー{i + 1}"); } } return names; }
-    public void OnReturnToDataLoadButtonClicked() { if (playerSetupCanvasObject != null) playerSetupCanvasObject.SetActive(false); if (dataLoadingCanvasObject != null) dataLoadingCanvasObject.SetActive(true); }
+    public void OnReturnToDataLoadButtonClicked()
+    {
+        if (playerSetupCanvasObject != null) playerSetupCanvasObject.SetActive(false);
+        if (dataLoadingCanvasObject != null) dataLoadingCanvasObject.SetActive(true);
+        if (undoCardSelectionButton != null) // ★追加★
+    {
+        undoCardSelectionButton.gameObject.SetActive(false);
+    }
+    }
+    // 「一手戻す」ボタンが押された時のお仕事
+public void OnUndoCardSelectionButtonClicked()
+{
+    WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
+    if (wordSelector != null)
+    {
+        Debug.Log("PlayerSetupManager: WordSelectionManagerのUndo処理を呼び出します。");
+        wordSelector.OnUndoButtonClicked(); // WordSelectionManagerのUndo関数を呼び出す
+
+        // Undo後は、再度Undoできないようにする（1手戻しのみの場合）
+        // ただし、この制御はWordSelectionManager側で行っているので、ここでは不要かも
+        // if (undoButton != null) undoButton.interactable = false;
+    }
+    else
+    {
+        Debug.LogError("PlayerSetupManager: WordSelectionManagerが見つかりません！Undo処理を実行できません。");
+    }
+}  
 }
