@@ -110,6 +110,13 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
 
     public void OnPointerClick(PointerEventData eventData)
     {
+                // ★↓まず、この札にアタッチされているButtonコンポーネントが操作不可なら、何もしない↓★
+        if (cardButton != null && !cardButton.interactable)
+        {
+            Debug.Log($"WordCardUI ({gameObject.name}): ボタンが無効なのでクリック処理を中断します。");
+            return;
+        }
+        // ★↑ここまで追加↑★
         if (isTeamSelected) return;
         if (selectionManager != null) {
             selectionManager.OnCardClicked(this);
