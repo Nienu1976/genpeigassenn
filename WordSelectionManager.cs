@@ -32,7 +32,7 @@ public class WordSelectionManager : MonoBehaviour
     private int cardsSelectedByHeishi = 0;
 
     //private const int CARDS_TO_SELECT_PER_TEAM = 45;
-    private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 90; // この枚数に達したら残りをロック
+    private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 10; // この枚数に達したら残りをロック
 
 
     [Header("取得枚数表示UI")]
@@ -48,8 +48,17 @@ public class WordSelectionManager : MonoBehaviour
     private int lastConfirmedCardTeamIndex = -1; // 直前に札を「確定」したチームのインデックス
     private int previousGenjiPlayerSelectIndex = 0;  // 札が確定される「前」の源氏インデックス
     private int previousHeishiPlayerSelectIndex = 0; // 札が確定される「前」の平氏インデックス
-    // ★↑ここまで↑★
+                                                     
+    [Header("画面遷移（インスペクターで設定）")]
+    public GameObject wordSelectionCanvasObject; // この札選択画面自身のCanvas
+    public GameObject playerSetupCanvasObject; // ★追加★ 戻り先のプレイヤー設定画面のCanvas
 
+    public GameObject quizAnsweringCanvasObject; // 次に進むクイズ解答画面のCanvas
+    public Button goToQuizAnsweringButton;     // 「クイズ解答へ進む」ボタン
+    public Button returnToPlayerSetupButton; // ★追加★ 「プレイヤー設定に戻る」ボタン
+
+        // ★↓ここから新しい変数を「正しく」追加します↓★
+ 
 
     void OnEnable()
     {
@@ -92,6 +101,7 @@ public class WordSelectionManager : MonoBehaviour
         currentHeishiPlayerSelectIndex = 0;
         currentlyHighlightedCard = null;
 
+
         // ★↓ここから合計選択枚数をチェックし、必要なら残りの札をロックする処理を追加↓★
         int totalSelectedCards = cardsSelectedByGenji + cardsSelectedByHeishi;
         Debug.Log($"現在の合計選択枚数: {totalSelectedCards}枚");
@@ -127,6 +137,22 @@ public class WordSelectionManager : MonoBehaviour
         Debug.Log("WordSelectionManager: 札の生成と初期設定完了。");
 
         Debug.Log("WordSelectionManager: 全ての札の生成と初期設定が完了しました。");
+
+        // ★↓「クイズ解答へ進む」ボタンを初期状態（非表示または押せない）にする↓★
+        if (goToQuizAnsweringButton != null)
+        {
+            goToQuizAnsweringButton.gameObject.SetActive(false); // 最初は非表示
+            // goToQuizAnsweringButton.interactable = false; // または最初は押せない
+        }
+                // ★↓「プレイヤー設定に戻る」ボタンのリスナー設定↓★
+        if (returnToPlayerSetupButton != null)
+        {
+            // もしリスナーが重複して登録されるのを防ぎたい場合は、一度削除してから追加する
+            // returnToPlayerSetupButton.onClick.RemoveAllListeners(); 
+            returnToPlayerSetupButton.onClick.AddListener(OnReturnToPlayerSetupButtonClicked);
+        }
+        
+        // ★↑ここまで↑★
     }
 
     bool ValidateReferences()
@@ -168,6 +194,33 @@ public class WordSelectionManager : MonoBehaviour
             // clickedCard.SetHighlighted(false, 1f); // SetSelectedByTeam の中でスケールも戻るはず
             clickedCard.SetSelectedByTeam(teamColor); // 色を変えて選択不可に (この中で元のスケールに戻る)
 
+            UpdateCardsSelectedDisplay(); 
+
+                        // ★↓ここから WordDataManager に獲得した札の情報を保存する処理を追加↓★
+            if (WordDataManager.Instance != null)
+            {
+                string teamInitial = (currentPlayerTurnTeamIndex == 0) ? "A" : "B";
+                // WordCardUIから、表示番号とワードを取得する
+                // (WordCardUIに GetCardNumber() と GetWord() が public で定義されている必要があります)
+                string cardNumber = clickedCard.GetCardNumber();
+                string cardWord = clickedCard.GetWord();
+
+                if (!string.IsNullOrEmpty(cardNumber) && !string.IsNullOrEmpty(cardWord))
+                {
+                    SelectableWordEntry selectedCardEntry = new SelectableWordEntry(cardNumber, cardWord);
+                    WordDataManager.Instance.AddSelectedCardToTeam(teamInitial, selectedCardEntry);
+                }
+                else
+                {
+                    Debug.LogError($"OnCardClicked: 確定した札 ({clickedCard.gameObject.name}) から番号またはワードを取得できませんでした。");
+                }
+            }
+            else
+            {
+                Debug.LogError("OnCardClicked: WordDataManagerのインスタンスが見つかりません！獲得札を記録できません。");
+            }
+            // ★↑ここまで↑★
+
             // ★↓Undoのための情報を記録する (ターン交代の直前)↓★
             lastConfirmedCard = clickedCard;              // どの札が確定されたか
             lastConfirmedCardTeamIndex = currentPlayerTurnTeamIndex; // どのチームが確定したか
@@ -198,25 +251,43 @@ public class WordSelectionManager : MonoBehaviour
 
             // TOTAL_CARDS_TO_TRIGGER_LOCK はクラスの変数宣言部分で 
             // private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 90; と定義されているはずです。
-            if (totalSelectedCardsNow >= TOTAL_CARDS_TO_TRIGGER_LOCK) 
+            if (totalSelectedCardsNow >= TOTAL_CARDS_TO_TRIGGER_LOCK)
             {
                 Debug.Log($"合計選択枚数が{TOTAL_CARDS_TO_TRIGGER_LOCK}枚に達しました。札選択フェイズ終了。残りの札をロックします。");
                 SetAllUnselectedCardsInteractable(false); // 残りの札（空札のはず）をロック
-                
+
+                                // ★↓ここが重要！この呼び出しがありますか？↓★
+                if (WordDataManager.Instance != null)
+                {
+                    WordDataManager.Instance.FinalizeCardSelectionAndDetermineEmptyCards();
+                    Debug.Log("WordSelectionManager: WordDataManagerに空札の決定と保存を指示しました。");
+                }
+                else
+                {
+                    Debug.LogError("WordSelectionManager: WordDataManagerのインスタンスが見つかりません！空札を記録できません。");
+                }
+                // ★↑ここまで↑★
+
                 if (overallTurnTextDisplay != null) overallTurnTextDisplay.text = "札選択終了";
                 if (currentSelectingPlayerNameDisplayText != null) currentSelectingPlayerNameDisplayText.text = "";
-                
+
                 // ここで次のフェイズ（クイズ解答フェイズ）へ移行する処理を呼び出す
-                // GoToQuizPhase(); 
+                // ★↓「クイズ解答へ進む」ボタンを表示または押せるようにする↓★
+                if (goToQuizAnsweringButton != null)
+                {
+                    goToQuizAnsweringButton.gameObject.SetActive(true);
+                    // goToQuizAnsweringButton.interactable = true;
+                }
+                // ★↑ここまで↑★
                 return; // ターン交代は行わない
             }
             // ★↑ここまで終了条件の判定を修正↑★
-            
+
             SwitchToNextPlayerAndTurn(); // まだ終了していなければターンを交代する
         }
     }
-            
-    　　　void UpdateOverallTurnDisplay()
+
+    void UpdateOverallTurnDisplay()
     {
         if (overallTurnTextDisplay != null)
         {
@@ -391,6 +462,8 @@ public class WordSelectionManager : MonoBehaviour
             return;
         }
 
+        UpdateCardsSelectedDisplay(); 
+
         Debug.Log($"★★ WordSelectionManager: Undo処理開始 - 札「{lastConfirmedCard.GetCardNumber()}」の選択を取り消します。★★");
 
         // 1. 直前に確定された札の WordCardUI を取得し、選択状態をリセットする
@@ -444,7 +517,7 @@ public class WordSelectionManager : MonoBehaviour
         foreach (Transform cardTransform in cardGridParent)
         {
             WordCardUI card = cardTransform.GetComponent<WordCardUI>();
-            if (card != null && !card.IsSelectedByTeam()) 
+            if (card != null && !card.IsSelectedByTeam())
             {
                 Button btn = card.GetComponent<Button>();
                 if (btn != null)
@@ -452,6 +525,111 @@ public class WordSelectionManager : MonoBehaviour
                     btn.interactable = interactable;
                 }
             }
+        }
+    }
+    // 「クイズ解答へ進む」ボタンが押された時のお仕事
+    public void OnGoToQuizAnsweringButtonClicked()
+    {
+        Debug.Log("「クイズ解答へ進む」ボタンが押されました。クイズ解答画面へ移行します。");
+
+        // この札選択画面を非表示にする
+        if (wordSelectionCanvasObject != null)
+        {
+            wordSelectionCanvasObject.SetActive(false);
+        }
+        else
+        {
+            Debug.LogError("WordSelectionManager: wordSelectionCanvasObject（この画面自身のCanvas）がInspectorで設定されていません！");
+        }
+
+        // クイズ解答画面を表示する
+        if (quizAnsweringCanvasObject != null)
+        {
+            quizAnsweringCanvasObject.SetActive(true);
+            // ここで、クイズ解答画面の初期化処理を呼び出す（もしあれば）
+            // QuizAnsweringManager quizMgr = FindObjectOfType<QuizAnsweringManager>();
+            // if (quizMgr != null) { quizMgr.StartQuizPhase(); }
+        }
+        else
+        {
+            Debug.LogError("WordSelectionManager: quizAnsweringCanvasObject（クイズ解答画面のCanvas）がInspectorで設定されていません！");
+        }
+                    // ★↓ここから QuizPhaseManager の SetupPlayers を呼び出す処理を追加します↓★
+            QuizPhaseManager quizManager = FindObjectOfType<QuizPhaseManager>(); // シーン内からQuizPhaseManagerを探す
+            if (quizManager != null)
+            {
+                Debug.Log("WordSelectionManager: QuizPhaseManager を発見。SetupPlayers() を呼び出します。");
+                quizManager.SetupPlayers(); // これでプレイヤー情報がセットアップされるはず
+            }
+            else
+            {
+                Debug.LogError("WordSelectionManager: QuizPhaseManager のインスタンスが見つかりません！クイズの準備ができません。");
+            }
+            // ★↑ここまで追加↑★
+    }
+　　　// 「プレイヤー設定に戻る」ボタンが押された時のお仕事
+    public void OnReturnToPlayerSetupButtonClicked()
+    {
+        Debug.Log("「プレイヤー設定に戻る」ボタンが押されました。プレイヤー設定画面へ移行します。");
+
+        // 札選択画面の進行状況をリセットする
+        // （もし、もっと丁寧なリセット処理が必要なら、専用の関数を作るのが良い）
+        cardsSelectedByGenji = 0;
+        cardsSelectedByHeishi = 0;
+        currentPlayerTurnTeamIndex = 0;
+        currentGenjiPlayerSelectIndex = 0;
+        currentHeishiPlayerSelectIndex = 0;
+        if (currentlyHighlightedCard != null)
+        {
+            // 拡大表示されていた札があれば元に戻す (SetHighlightedの第3引数は cardGridParent)
+            // currentlyHighlightedCard.SetHighlighted(false, 1f, cardGridParent); 
+            // ↑これは SetHighlighted が3引数の場合。現在の2引数の場合は以下でOK。
+            currentlyHighlightedCard.SetHighlighted(false, 1f); 
+            currentlyHighlightedCard = null;
+        }
+        UpdateCardsSelectedDisplay(); // 枚数表示もリセット
+        // Undo情報もリセット
+        lastConfirmedCard = null;
+        lastConfirmedCardTeamIndex = -1;
+        PlayerSetupManager psm = FindObjectOfType<PlayerSetupManager>();
+        if (psm != null && psm.undoCardSelectionButton != null)
+        {
+            psm.undoCardSelectionButton.interactable = false;
+        }
+        // 「クイズ解答へ進む」ボタンも非表示に戻す
+        if (goToQuizAnsweringButton != null)
+        {
+            goToQuizAnsweringButton.gameObject.SetActive(false);
+        }
+        // 既存の札を全て削除する（次回プレイヤー設定から来たときに再生成するため）
+        foreach (Transform child in cardGridParent)
+        {
+            Destroy(child.gameObject);
+        }
+        Debug.Log("札選択画面の状態をリセットし、既存の札を削除しました。");
+
+
+        // この札選択画面を非表示にする
+        if (wordSelectionCanvasObject != null)
+        {
+            wordSelectionCanvasObject.SetActive(false);
+        }
+        else
+        {
+            Debug.LogError("WordSelectionManager: wordSelectionCanvasObject（この画面自身のCanvas）がInspectorで設定されていません！");
+        }
+
+        // プレイヤー設定画面を表示する
+        if (playerSetupCanvasObject != null)
+        {
+            playerSetupCanvasObject.SetActive(true);
+            // プレイヤー設定画面の初期化処理を呼び出す（もしあれば）
+            // PlayerSetupManager playerSetupMgr = FindObjectOfType<PlayerSetupManager>();
+            // if (playerSetupMgr != null) { playerSetupMgr.InitializePlayerSetupScreen(); }
+        }
+        else
+        {
+            Debug.LogError("WordSelectionManager: playerSetupCanvasObject（プレイヤー設定画面のCanvas）がInspectorで設定されていません！");
         }
     }
 }
