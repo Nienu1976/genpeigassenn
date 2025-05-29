@@ -1,0 +1,214 @@
+using UnityEngine;
+using System.Collections.Generic; // List を使うために必要
+using TMPro; // もし問題文などを表示するなら必要
+
+public class QuizPhaseManager : MonoBehaviour
+{
+    public List<QuizPlayer> genjiPlayers = new List<QuizPlayer>();
+    public List<QuizPlayer> heishiPlayers = new List<QuizPlayer>();
+
+    // ★↓ここから新しい変数を追加↓★
+    [Header("正解数表示UI（インスペクターで設定、上から順に）")]
+    public List<TextMeshProUGUI> genjiPlayerCorrectCountTexts;  // 源氏軍の各プレイヤーの正解数表示用
+    public List<TextMeshProUGUI> heishiPlayerCorrectCountTexts; // 平氏軍の各プレイヤーの正解数表示用
+    // ★↑ここまで↑★
+
+    // このマネージャーが有効になったら（クイズ解答画面が表示されたら）呼ばれるお仕事
+    void OnEnable()
+    {
+        //Debug.Log("★★★★ QuizPhaseManager: OnEnable() が【本当に】呼び出されました！ ★★★★"); 
+        //SetupPlayers();
+    }
+
+    // WordDataManagerからプレイヤー情報を読み込んで、QuizPlayerのリストを作るお仕事
+    public void SetupPlayers()
+    {   Debug.Log("★★★★ QuizPhaseManager: SetupPlayers() が【本当に】呼び出されました！ ★★★★"); 
+
+    
+        // ★↓ここからデバッグログを追加します↓★
+        Debug.Log($"--- WordDataManagerからのプレイヤー情報 ---");
+        Debug.Log($"源氏軍 参加人数 (GenjiPlayerCount): {WordDataManager.Instance.GenjiPlayerCount}");
+        Debug.Log($"源氏軍 名前リストの数 (GenjiPlayerNames.Count): {WordDataManager.Instance.GenjiPlayerNames.Count}");
+        for(int idx = 0; idx < WordDataManager.Instance.GenjiPlayerNames.Count; idx++)
+        {
+            Debug.Log($"源氏軍 名前[{idx}]: {WordDataManager.Instance.GenjiPlayerNames[idx]}");
+        }
+        Debug.Log($"源氏軍 一人あたり上限解答数 (GenjiMaxAnswersPerPlayer): {WordDataManager.Instance.GenjiMaxAnswersPerPlayer}");
+
+        Debug.Log($"平氏軍 参加人数 (HeishiPlayerCount): {WordDataManager.Instance.HeishiPlayerCount}");
+        Debug.Log($"平氏軍 名前リストの数 (HeishiPlayerNames.Count): {WordDataManager.Instance.HeishiPlayerNames.Count}");
+        for(int idx = 0; idx < WordDataManager.Instance.HeishiPlayerNames.Count; idx++)
+        {
+            Debug.Log($"平氏軍 名前[{idx}]: {WordDataManager.Instance.HeishiPlayerNames[idx]}");
+        }
+        Debug.Log($"平氏軍 一人あたり上限解答数 (HeishiMaxAnswersPerPlayer): {WordDataManager.Instance.HeishiMaxAnswersPerPlayer}");
+        Debug.Log($"------------------------------------");
+        // ★↑ここまでデバッグログを追加↑★
+    
+
+        genjiPlayers.Clear();
+        heishiPlayers.Clear();
+
+        if (WordDataManager.Instance == null)
+        {
+            Debug.LogError("QuizPhaseManager: WordDataManagerのインスタンスが見つかりません！");
+            return;
+        }
+
+        else
+
+            // 源氏軍のプレイヤー情報をセットアップ
+            for (int i = 0; i < WordDataManager.Instance.GenjiPlayerCount; i++)
+            {
+                if (i < WordDataManager.Instance.GenjiPlayerNames.Count) // 名前の数と参加人数が一致しているか確認
+                {
+                    bool isLeader = (i == 0); // 最初のプレイヤーを総大将とする
+                    genjiPlayers.Add(new QuizPlayer(
+                        WordDataManager.Instance.GenjiPlayerNames[i],
+                        "A", // チームID (仮)
+                        isLeader,
+                        WordDataManager.Instance.GenjiMaxAnswersPerPlayer
+                    ));
+                    Debug.Log($"源氏軍プレイヤー追加: {WordDataManager.Instance.GenjiPlayerNames[i]}, リーダー: {isLeader}, 上限解答: {WordDataManager.Instance.GenjiMaxAnswersPerPlayer}");
+                }
+                            else // ★名前リストが不足している場合のログを追加★
+            {
+                Debug.LogWarning($"SetupPlayers: 源氏軍プレイヤー {i} の名前データがありません。GenjiPlayerNames.Count ({WordDataManager.Instance.GenjiPlayerNames.Count}) が不足しています。");
+            }
+            }
+
+        // 平氏軍のプレイヤー情報をセットアップ
+        for (int i = 0; i < WordDataManager.Instance.HeishiPlayerCount; i++)
+        {
+            if (i < WordDataManager.Instance.HeishiPlayerNames.Count)
+            {
+                bool isLeader = (i == 0);
+                heishiPlayers.Add(new QuizPlayer(
+                    WordDataManager.Instance.HeishiPlayerNames[i],
+                    "B", // チームID (仮)
+                    isLeader,
+                    WordDataManager.Instance.HeishiMaxAnswersPerPlayer
+                ));
+                Debug.Log($"平氏軍プレイヤー追加: {WordDataManager.Instance.HeishiPlayerNames[i]}, リーダー: {isLeader}, 上限解答: {WordDataManager.Instance.HeishiMaxAnswersPerPlayer}");
+            }
+                        else // ★名前リストが不足している場合のログを追加★
+            {
+                Debug.LogWarning($"SetupPlayers: 平氏軍プレイヤー {i} の名前データがありません。HeishiPlayerNames.Count ({WordDataManager.Instance.HeishiPlayerNames.Count}) が不足しています。");
+            }
+        }
+        Debug.Log("QuizPhaseManager: プレイヤー情報のセットアップ完了。");
+                // ★↓ここから追加↓★
+        Debug.Log($"★★ SetupPlayers完了時: genjiPlayers.Count = {genjiPlayers.Count} ★★");
+        for(int i = 0; i < genjiPlayers.Count; i++)
+        {
+            Debug.Log($"源氏軍プレイヤー {i}: {genjiPlayers[i].PlayerName}, 解答権: {genjiPlayers[i].CanAnswer}, 上限: {genjiPlayers[i].MaxAnswersAllowed}");
+        }
+        Debug.Log($"★★ SetupPlayers完了時: heishiPlayers.Count = {heishiPlayers.Count} ★★");
+        for(int i = 0; i < heishiPlayers.Count; i++)
+        {
+            Debug.Log($"平氏軍プレイヤー {i}: {heishiPlayers[i].PlayerName}, 解答権: {heishiPlayers[i].CanAnswer}, 上限: {heishiPlayers[i].MaxAnswersAllowed}");
+        }
+
+
+        // ★↓正解数表示を初期化する↓★
+        UpdateAllPlayerCorrectCountDisplays();
+        // ★↑ここまで↑★
+    }
+
+    // ★↓各プレイヤーの「○ボタン」から呼び出されるお仕事（例として源氏1人目）↓★
+    // （将来的に、どのボタンが押されたかを引数で受け取る形にするのが良いでしょう）
+    public void OnGenjiPlayerCorrect(int playerIndex) 
+    {
+        Debug.Log($"★★ OnGenjiPlayerCorrect が呼び出されました！ playerIndex: {playerIndex} ★★"); 
+        
+        if (playerIndex >= 0 && playerIndex < genjiPlayers.Count) 
+        {
+            Debug.Log($"OnGenjiPlayerCorrect: playerIndex ({playerIndex}) は有効な範囲です。(genjiPlayers.Count: {genjiPlayers.Count})");
+            if (genjiPlayers[playerIndex].CanAnswer) 
+            {
+                Debug.Log($"OnGenjiPlayerCorrect: プレイヤー「{genjiPlayers[playerIndex].PlayerName}」は解答権があります。正解数を増やします。");
+                genjiPlayers[playerIndex].IncrementCorrectAnswers(); 
+                UpdatePlayerCorrectCountDisplay("A", playerIndex); 
+            }
+            else
+            {
+                Debug.LogWarning($"OnGenjiPlayerCorrect: プレイヤー「{genjiPlayers[playerIndex].PlayerName}」は現在解答できません (CanAnswer is false)。"); 
+            }
+        }
+        else // ★playerIndex が範囲外だった場合★
+        {
+            Debug.LogError($"★★ OnGenjiPlayerCorrect: playerIndex ({playerIndex}) が無効な範囲です！ genjiPlayers.Count は {genjiPlayers.Count} です。処理を中断します。 ★★"); 
+        }
+    }
+
+    public void OnHeishiPlayerCorrect(int playerIndex)
+    {
+        if (playerIndex >= 0 && playerIndex < heishiPlayers.Count)
+        {
+            if (heishiPlayers[playerIndex].CanAnswer)
+            {
+                heishiPlayers[playerIndex].IncrementCorrectAnswers();
+                UpdatePlayerCorrectCountDisplay("B", playerIndex);
+                // ProcessCorrectAnswer("B", playerIndex); // 仮の関数
+            }
+        }
+    }
+    // ★↓指定されたプレイヤーの正解数表示を更新するお仕事↓★
+    void UpdatePlayerCorrectCountDisplay(string teamInitial, int playerIndex)
+    {
+        if (teamInitial == "A") // 源氏軍
+        {
+            if (genjiPlayerCorrectCountTexts != null &&
+                playerIndex >= 0 && playerIndex < genjiPlayerCorrectCountTexts.Count &&
+                genjiPlayerCorrectCountTexts[playerIndex] != null &&
+                playerIndex < genjiPlayers.Count && genjiPlayers[playerIndex] != null)
+            {
+                genjiPlayerCorrectCountTexts[playerIndex].text = genjiPlayers[playerIndex].CorrectAnswers.ToString();
+
+            }
+        }
+        else if (teamInitial == "B") // 平氏軍
+        {
+            if (heishiPlayerCorrectCountTexts != null &&
+                playerIndex >= 0 && playerIndex < heishiPlayerCorrectCountTexts.Count &&
+                heishiPlayerCorrectCountTexts[playerIndex] != null &&
+                playerIndex < heishiPlayers.Count && heishiPlayers[playerIndex] != null)
+            {
+                heishiPlayerCorrectCountTexts[playerIndex].text = heishiPlayers[playerIndex].CorrectAnswers.ToString();
+
+            }
+        }
+    }
+    // 全プレイヤーの正解数表示を更新するお仕事
+        
+        // 全プレイヤーの正解数表示を更新するお仕事
+    void UpdateAllPlayerCorrectCountDisplays()
+    {
+        if (genjiPlayers != null)
+        {
+            for (int i = 0; i < genjiPlayers.Count; i++)
+            {
+                if (genjiPlayerCorrectCountTexts != null && i < genjiPlayerCorrectCountTexts.Count)
+                {
+                    // ★↓ここが正しいか確認↓★
+                    UpdatePlayerCorrectCountDisplay("A", i); 
+                }
+            }
+        }
+        if (heishiPlayers != null)
+        {
+            for (int i = 0; i < heishiPlayers.Count; i++)
+            {
+                if (heishiPlayerCorrectCountTexts != null && i < heishiPlayerCorrectCountTexts.Count)
+                {
+                    // ★↓ここが正しいか確認↓★
+                    UpdatePlayerCorrectCountDisplay("B", i);
+                }
+            }
+        }
+        Debug.Log("全プレイヤーの正解数表示を更新しました。(UpdateAllPlayerCorrectCountDisplays)");
+    }
+
+
+    // （将来的に、×ボタンが押された時の処理もここに追加します）
+}
