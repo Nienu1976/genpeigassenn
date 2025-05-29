@@ -175,11 +175,7 @@ public class PlayerSetupManager : MonoBehaviour
             WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
             if (wordSelector != null) { wordSelector.InitializeAndDisplayCards(); }
             else { Debug.LogError("PSM: WordSelectionManagerが見つかりません！"); }
-        }
-        if (cardSelectionCanvasObject != null)
-        {
-            cardSelectionCanvasObject.SetActive(true);
-            // ... (WordSelectionManagerの初期化呼び出し) ...
+   
             if (undoCardSelectionButton != null) // ★追加★
             {
                 undoCardSelectionButton.gameObject.SetActive(true); // Undoボタンを表示
@@ -207,9 +203,6 @@ public void OnUndoCardSelectionButtonClicked()
         Debug.Log("PlayerSetupManager: WordSelectionManagerのUndo処理を呼び出します。");
         wordSelector.OnUndoButtonClicked(); // WordSelectionManagerのUndo関数を呼び出す
 
-        // Undo後は、再度Undoできないようにする（1手戻しのみの場合）
-        // ただし、この制御はWordSelectionManager側で行っているので、ここでは不要かも
-        // if (undoButton != null) undoButton.interactable = false;
     }
     else
     {
