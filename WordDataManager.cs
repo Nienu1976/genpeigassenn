@@ -50,20 +50,43 @@ public class WordDataManager : MonoBehaviour
     public enum LoadResult { Success, FileNotFound, FormatError, EmptyFile, UnknownError }
     public static WordDataManager Instance { get; private set; }
 
-[Header("チーム設定情報")]
-public int GenjiPlayerCount { get; set; } = 1; 
-public List<string> GenjiPlayerNames { get; private set; } = new List<string>();
-public int HeishiPlayerCount { get; set; } = 1; 
-public List<string> HeishiPlayerNames { get; private set; } = new List<string>();
+    [Header("チーム設定情報")]
+    public int GenjiPlayerCount { get; set; } = 1;
+    public List<string> GenjiPlayerNames { get; private set; } = new List<string>();
+    public int HeishiPlayerCount { get; set; } = 1;
+    public List<string> HeishiPlayerNames { get; private set; } = new List<string>();
     // ★↓チームごとの上限解答数を追加↓★
+    // ★↑ここまで↑★
+    [Header("札選択フェイズで獲得/残った札のリスト")]
+
+    public List<SelectableWordEntry> GenjiSelectedCards { get; set; } = new List<SelectableWordEntry>();
+    public List<SelectableWordEntry> HeishiSelectedCards { get; set; } = new List<SelectableWordEntry>();
+    public List<SelectableWordEntry> EmptyCardsList { get; private set; } = new List<SelectableWordEntry>();
+    // ★↑ここまで↑★
     public int GenjiMaxAnswersPerPlayer { get; set; } = 4; // 源氏軍の一人あたりの上限解答数
     public int HeishiMaxAnswersPerPlayer { get; set; } = 4; // 平氏軍の一人あたりの上限解答数
-    // ★↑ここまで↑★
 
     void Awake()
     {
-        if (Instance == null) { Instance = this; DontDestroyOnLoad(gameObject); }
-        else if (Instance != this) { Destroy(gameObject); }
+        Debug.Log($"★★★★ WordDataManager: Awake() 実行開始。GameObject名: {gameObject.name} ★★★★"); // ★追加★
+
+        if (Instance == null)
+        {
+            Instance = this;
+            DontDestroyOnLoad(gameObject); // シーンをまたいでも消えないようにする
+            Debug.Log($"★★★★ WordDataManager: Instance に {gameObject.name} を設定しました。★★★★"); // ★変更★
+        }
+        else if (Instance != this)
+        {
+            // 既に別のインスタンスが存在する場合
+            Debug.LogWarning($"★★★★ WordDataManager: Instance は既に存在しています ({Instance.gameObject.name})。新しい {gameObject.name} は破棄します。★★★★"); // ★変更★
+            Destroy(gameObject);
+        }
+        else
+        {
+            // Instance == this の場合 (通常は起こらないはずだが念のため)
+            Debug.LogWarning($"★★★★ WordDataManager: Instance は既にこの {gameObject.name} でした。何もしません。★★★★"); // ★追加★
+        }
     }
 
     public LoadResult LoadSelectableWordsFromCSV(string filePath)
@@ -121,8 +144,8 @@ public List<string> HeishiPlayerNames { get; private set; } = new List<string>()
         }
         catch (System.Exception e) { Debug.LogError($"LoadMasterQuizData: エラー: {e.Message}"); return LoadResult.UnknownError; }
     }
-        // ★↓チーム情報を設定するための新しい関数を追加↓★
-    public void SetTeamSettings(int genjiCount, List<string> genjiNames, int genjiMaxAnswers, 
+    // ★↓チーム情報を設定するための新しい関数を追加↓★
+    public void SetTeamSettings(int genjiCount, List<string> genjiNames, int genjiMaxAnswers,
                                 int heishiCount, List<string> heishiNames, int heishiMaxAnswers)
     {
         GenjiPlayerCount = genjiCount;
@@ -136,6 +159,74 @@ public List<string> HeishiPlayerNames { get; private set; } = new List<string>()
         Debug.Log($"WordDataManager: チーム設定を保存しました。");
         Debug.Log($"源氏: {GenjiPlayerCount}人, 名前: [{string.Join(", ", GenjiPlayerNames)}], 上限解答: {GenjiMaxAnswersPerPlayer}");
         Debug.Log($"平氏: {HeishiPlayerCount}人, 名前: [{string.Join(", ", HeishiPlayerNames)}], 上限解答: {HeishiMaxAnswersPerPlayer}");
+    
+    // 新しい試合の準備なので、前の試合の獲得札と空札の記録はクリアする
+    GenjiSelectedCards.Clear();
+        HeishiSelectedCards.Clear();
+        EmptyCardsList.Clear(); // ★ここもクリア★
+        Debug.Log($"WordDataManager: チーム設定保存＆獲得札・空札リストクリア。");
     }
-    // ★↑ここまで新しい関数を追加↑★
+ 
+　　    // ★↓「選択された札をチームのリストに追加する」関数 (これは以前ご提案したものと同じはず)↓★
+    public void AddSelectedCardToTeam(string teamInitial, SelectableWordEntry cardEntry)
+    {
+        if (teamInitial == "A") // 仮に源氏を"A"とする
+        {
+            if (!GenjiSelectedCards.Any(card => card.DisplayNumber == cardEntry.DisplayNumber)) // 重複追加を防ぐ
+            {
+                GenjiSelectedCards.Add(cardEntry);
+            }
+            Debug.Log($"★WordDataManager★ 源氏軍が札獲得！ 現在の源氏軍獲得札リスト ({GenjiSelectedCards.Count}枚):");
+            foreach (var c in GenjiSelectedCards) { Debug.Log($"- 番号:{c.DisplayNumber}, ワード:{c.Word}"); }
+
+        }
+        else if (teamInitial == "B") // 仮に平氏を"B"とする
+        {
+            if (!HeishiSelectedCards.Any(card => card.DisplayNumber == cardEntry.DisplayNumber)) // 重複追加を防ぐ
+            {
+                HeishiSelectedCards.Add(cardEntry);
+            }
+        Debug.Log($"★WordDataManager★ 平氏軍が札獲得！ 現在の平氏軍獲得札リスト ({HeishiSelectedCards.Count}枚):");
+        foreach(var c in HeishiSelectedCards) { Debug.Log($"- 番号:{c.DisplayNumber}, ワード:{c.Word}"); }
+
+        }
+        // Debug.Log($"WordDataManager: チーム{teamInitial}が札「{cardEntry.DisplayNumber}:{cardEntry.Word}」を獲得。");
+    }
+    // ★↓「Undoのために、最後に獲得した札をチームのリストから削除する」関数 (これも以前ご提案したものと同じはず)↓★
+    public bool RemoveLastSelectedCardFromTeam(string teamInitial, SelectableWordEntry cardToRemove) // どの札を消すか明確に指定
+    {
+        bool removed = false;
+        if (teamInitial == "A")
+        {
+            removed = GenjiSelectedCards.Remove(cardToRemove);
+        }
+        else if (teamInitial == "B")
+        {
+            removed = HeishiSelectedCards.Remove(cardToRemove);
+        }
+        // if(removed) Debug.Log($"WordDataManager: チーム{teamInitial}の札「{cardToRemove.DisplayNumber}」をUndo。");
+        return removed;
+    }
+        public void FinalizeCardSelectionAndDetermineEmptyCards()
+    {
+        EmptyCardsList.Clear(); 
+        if (SelectableWordsList == null || SelectableWordsList.Count == 0) return;
+
+        // 全ての選択可能なワードについて、それが源氏または平氏に選ばれたかチェック
+        foreach (SelectableWordEntry selectableCard in SelectableWordsList)
+        {
+            bool isSelectedByGenji = GenjiSelectedCards.Any(card => card.DisplayNumber == selectableCard.DisplayNumber);
+            bool isSelectedByHeishi = HeishiSelectedCards.Any(card => card.DisplayNumber == selectableCard.DisplayNumber);
+
+            if (!isSelectedByGenji && !isSelectedByHeishi) // どちらにも選ばれていなければ空札
+            {
+                EmptyCardsList.Add(selectableCard);
+            }
+        }
+        Debug.Log($"WordDataManager: 空札を決定・保存しました。空札の数: {EmptyCardsList.Count}枚");
+        // 確認用ログ
+        // foreach(var emptyCard in EmptyCardsList) { Debug.Log($"空札: {emptyCard.DisplayNumber}:{emptyCard.Word}"); }
+    }
+    // ★↑ここまで↑★
+    // ★↑ここまで↑★ 
 }
