@@ -159,15 +159,15 @@ public class WordDataManager : MonoBehaviour
         Debug.Log($"WordDataManager: チーム設定を保存しました。");
         Debug.Log($"源氏: {GenjiPlayerCount}人, 名前: [{string.Join(", ", GenjiPlayerNames)}], 上限解答: {GenjiMaxAnswersPerPlayer}");
         Debug.Log($"平氏: {HeishiPlayerCount}人, 名前: [{string.Join(", ", HeishiPlayerNames)}], 上限解答: {HeishiMaxAnswersPerPlayer}");
-    
-    // 新しい試合の準備なので、前の試合の獲得札と空札の記録はクリアする
-    GenjiSelectedCards.Clear();
+
+        // 新しい試合の準備なので、前の試合の獲得札と空札の記録はクリアする
+        GenjiSelectedCards.Clear();
         HeishiSelectedCards.Clear();
         EmptyCardsList.Clear(); // ★ここもクリア★
         Debug.Log($"WordDataManager: チーム設定保存＆獲得札・空札リストクリア。");
     }
- 
-　　    // ★↓「選択された札をチームのリストに追加する」関数 (これは以前ご提案したものと同じはず)↓★
+
+    // ★↓「選択された札をチームのリストに追加する」関数 (これは以前ご提案したものと同じはず)↓★
     public void AddSelectedCardToTeam(string teamInitial, SelectableWordEntry cardEntry)
     {
         if (teamInitial == "A") // 仮に源氏を"A"とする
@@ -186,8 +186,8 @@ public class WordDataManager : MonoBehaviour
             {
                 HeishiSelectedCards.Add(cardEntry);
             }
-        Debug.Log($"★WordDataManager★ 平氏軍が札獲得！ 現在の平氏軍獲得札リスト ({HeishiSelectedCards.Count}枚):");
-        foreach(var c in HeishiSelectedCards) { Debug.Log($"- 番号:{c.DisplayNumber}, ワード:{c.Word}"); }
+            Debug.Log($"★WordDataManager★ 平氏軍が札獲得！ 現在の平氏軍獲得札リスト ({HeishiSelectedCards.Count}枚):");
+            foreach (var c in HeishiSelectedCards) { Debug.Log($"- 番号:{c.DisplayNumber}, ワード:{c.Word}"); }
 
         }
         // Debug.Log($"WordDataManager: チーム{teamInitial}が札「{cardEntry.DisplayNumber}:{cardEntry.Word}」を獲得。");
@@ -207,9 +207,9 @@ public class WordDataManager : MonoBehaviour
         // if(removed) Debug.Log($"WordDataManager: チーム{teamInitial}の札「{cardToRemove.DisplayNumber}」をUndo。");
         return removed;
     }
-        public void FinalizeCardSelectionAndDetermineEmptyCards()
+    public void FinalizeCardSelectionAndDetermineEmptyCards()
     {
-        EmptyCardsList.Clear(); 
+        EmptyCardsList.Clear();
         if (SelectableWordsList == null || SelectableWordsList.Count == 0) return;
 
         // 全ての選択可能なワードについて、それが源氏または平氏に選ばれたかチェック
@@ -227,6 +227,14 @@ public class WordDataManager : MonoBehaviour
         // 確認用ログ
         // foreach(var emptyCard in EmptyCardsList) { Debug.Log($"空札: {emptyCard.DisplayNumber}:{emptyCard.Word}"); }
     }
-    // ★↑ここまで↑★
-    // ★↑ここまで↑★ 
+// --- ここからダミーメソッド ---
+public void RestoreAllCardStates(object genjiCardsState, object heishiCardsState, object emptyCardsState) { }
+public void RemoveCardFromGenjiList(object card) { }
+public void RemoveCardFromHeishiList(object card) { }
+public void RemoveCardFromEmptyList(object card) { }
+public bool RemoveSpecificCardFromTeam(int teamIndex, int cardIndex,int TeamInitial) { return true; }
+// --- ここまでダミーメソッド ---
+
+
+
 }
