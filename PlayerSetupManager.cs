@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
+using System.Collections;
 
 public class PlayerSetupManager : MonoBehaviour
 {
@@ -40,6 +41,11 @@ public class PlayerSetupManager : MonoBehaviour
 
     private int maxGenjiPlayersUI;
     private int maxHeishiPlayersUI;
+
+    [Header("札選択画面への移行動画演出（インスペクターで設定）")]
+    public GameObject playerSetupTransitionVideoRoot; // 動画の親GameObject
+    public UnityEngine.Video.VideoPlayer playerSetupTransitionVideoPlayer; // 動画再生用のVideoPlayer
+    public UnityEngine.Video.VideoClip playerSetupTransitionVideoClip; // 再生する動画クリップ
 
     void Start()
     {
@@ -168,19 +174,22 @@ public class PlayerSetupManager : MonoBehaviour
         if (WordDataManager.Instance != null) { WordDataManager.Instance.SetTeamSettings(genjiCount, genjiNames, genjiMaxAns, heishiCount, heishiNames, heishiMaxAns); }
         else { Debug.LogError("PSM: WordDataManagerが見つかりません！"); return; }
 
-        if (playerSetupCanvasObject != null) playerSetupCanvasObject.SetActive(false);
-        if (cardSelectionCanvasObject != null)
+        // ボタンを非活性化 (任意)
+        if (goToCardSelectButton != null)
         {
-            cardSelectionCanvasObject.SetActive(true);
-            WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
-            if (wordSelector != null) { wordSelector.InitializeAndDisplayCards(); }
-            else { Debug.LogError("PSM: WordSelectionManagerが見つかりません！"); }
-   
-            if (undoCardSelectionButton != null) // ★追加★
-            {
-                undoCardSelectionButton.gameObject.SetActive(true); // Undoボタンを表示
-                //undoCardSelectionButton .interactable = false; // ただし、最初は押せない
-            }
+            goToCardSelectButton.interactable = false;
+        }
+
+        // 動画再生処理を開始
+        if (playerSetupTransitionVideoRoot != null && playerSetupTransitionVideoPlayer != null && playerSetupTransitionVideoClip != null)
+        {
+            Debug.Log("[PlayerSetupManager] プレイヤー設定後動画の再生準備を開始します。");
+            StartCoroutine(PlayPlayerSetupTransitionVideoAndProceed());
+        }
+        else
+        {
+            Debug.LogError("[PlayerSetupManager] プレイヤー設定後動画の再生に必要な参照が設定されていません。動画をスキップして札選択画面へ進みます。");
+            ProceedToCardSelectionScreen();
         }
     }
 
@@ -190,23 +199,161 @@ public class PlayerSetupManager : MonoBehaviour
         if (playerSetupCanvasObject != null) playerSetupCanvasObject.SetActive(false);
         if (dataLoadingCanvasObject != null) dataLoadingCanvasObject.SetActive(true);
         if (undoCardSelectionButton != null) // ★追加★
-    {
-        undoCardSelectionButton.gameObject.SetActive(false);
-    }
+        {
+            undoCardSelectionButton.gameObject.SetActive(false);
+        }
     }
     // 「一手戻す」ボタンが押された時のお仕事
-public void OnUndoCardSelectionButtonClicked()
-{
-    WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
-    if (wordSelector != null)
+    public void OnUndoCardSelectionButtonClicked()
     {
-        Debug.Log("PlayerSetupManager: WordSelectionManagerのUndo処理を呼び出します。");
-        wordSelector.OnUndoButtonClicked(); // WordSelectionManagerのUndo関数を呼び出す
+        WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
+        if (wordSelector != null)
+        {
+            Debug.Log("PlayerSetupManager: WordSelectionManagerのUndo処理を呼び出します。");
+            wordSelector.OnUndoButtonClicked(); // WordSelectionManagerのUndo関数を呼び出す
 
+        }
+        else
+        {
+            Debug.LogError("PlayerSetupManager: WordSelectionManagerが見つかりません！Undo処理を実行できません。");
+        }
     }
-    else
+
+    private IEnumerator PlayPlayerSetupTransitionVideoAndProceed()
     {
-        Debug.LogError("PlayerSetupManager: WordSelectionManagerが見つかりません！Undo処理を実行できません。");
+        Debug.Log("[PlayerSetupManager] プレイヤー設定後動画の再生を開始します。(コルーチン開始)");
+
+        // 0. まず、動画が表示されるべきCanvas（playerSetupCanvasObject）がアクティブであることを確認
+        //    (このCanvas自体は、動画再生中も表示したままで良いかもしれません。動画がその上に重なるので。)
+        //    今回は、playerSetupCanvasObjectはアクティブのまま、その上に動画UIが表示されると仮定します。
+
+        // 1. 次に、動画表示用の親GameObject (playerSetupTransitionVideoRoot) の有効化
+        if (playerSetupTransitionVideoRoot == null)
+        {
+            Debug.LogError("[PlayerSetupManager] playerSetupTransitionVideoRoot が null です！動画再生できません。");
+            ProceedToCardSelectionScreen(); // 動画なしで直接次へ
+            yield break;
+        }
+        if (!playerSetupTransitionVideoRoot.activeSelf)
+        {
+            playerSetupTransitionVideoRoot.SetActive(true);
+            Debug.Log("[PlayerSetupManager] playerSetupTransitionVideoRoot をアクティブにしました。");
+        }
+        yield return null; // 親のアクティブ化を1フレーム待つ
+
+        // 2. VideoPlayerとそのGameObjectがアクティブか確認し、必要ならアクティブにする
+        if (playerSetupTransitionVideoPlayer == null)
+        {
+            Debug.LogError("[PlayerSetupManager] playerSetupTransitionVideoPlayer参照がnullです！動画再生できません。");
+            if (playerSetupTransitionVideoRoot != null) playerSetupTransitionVideoRoot.SetActive(false);
+            ProceedToCardSelectionScreen();
+            yield break;
+        }
+        // (VideoPlayerのGameObjectやコンポーネントの有効化チェックは、前回同様にここに入れてもOKです)
+        if (!playerSetupTransitionVideoPlayer.gameObject.activeInHierarchy)
+        {
+            Debug.LogWarning($"[動画準備] {playerSetupTransitionVideoPlayer.gameObject.name} が階層的に非アクティブだったので強制的にアクティブ化試行");
+            playerSetupTransitionVideoPlayer.gameObject.SetActive(true); yield return null;
+        }
+        if (!playerSetupTransitionVideoPlayer.enabled)
+        {
+            playerSetupTransitionVideoPlayer.enabled = true; yield return null;
+        }
+
+        // 3. VideoPlayerの設定と再生準備
+        if (playerSetupTransitionVideoClip == null)
+        {
+            Debug.LogError("[PlayerSetupManager] playerSetupTransitionVideoClip が null です！動画再生できません。");
+            if (playerSetupTransitionVideoRoot != null) playerSetupTransitionVideoRoot.SetActive(false);
+            ProceedToCardSelectionScreen();
+            yield break;
+        }
+
+        if (playerSetupTransitionVideoPlayer.gameObject.activeInHierarchy && playerSetupTransitionVideoPlayer.enabled)
+        {
+            playerSetupTransitionVideoPlayer.clip = playerSetupTransitionVideoClip;
+            playerSetupTransitionVideoPlayer.isLooping = false;
+
+            playerSetupTransitionVideoPlayer.loopPointReached -= OnPlayerSetupTransitionVideoEnd;
+            playerSetupTransitionVideoPlayer.loopPointReached += OnPlayerSetupTransitionVideoEnd;
+
+            playerSetupTransitionVideoPlayer.Prepare();
+            Debug.Log("[PlayerSetupManager] VideoPlayer.Prepare() を呼び出しました。");
+
+            float prepareWaitStartTime = Time.time;
+            while (!playerSetupTransitionVideoPlayer.isPrepared)
+            {
+                if (Time.time - prepareWaitStartTime > 7f)
+                {
+                    Debug.LogError("[PlayerSetupManager] VideoPlayer.Prepare() が7秒以上完了しませんでした。動画再生を中止します。");
+                    if (playerSetupTransitionVideoRoot != null) playerSetupTransitionVideoRoot.SetActive(false);
+                    ProceedToCardSelectionScreen();
+                    yield break;
+                }
+                yield return null;
+            }
+            Debug.Log("[PlayerSetupManager] プレイヤー設定後動画の準備完了。再生開始。");
+            playerSetupTransitionVideoPlayer.Play();
+        }
+        else
+        {
+            Debug.LogError($"[PlayerSetupManager] Prepare() を呼び出す直前でVideoPlayerが無効な状態です。動画再生を中止します。");
+            if (playerSetupTransitionVideoRoot != null) playerSetupTransitionVideoRoot.SetActive(false);
+            ProceedToCardSelectionScreen();
+        }
     }
-}  
+
+    private void OnPlayerSetupTransitionVideoEnd(UnityEngine.Video.VideoPlayer vp)
+    {
+        Debug.Log("[PlayerSetupManager] プレイヤー設定後動画の再生が終了しました。(イベント)");
+
+        if (vp != null)
+        {
+            vp.loopPointReached -= OnPlayerSetupTransitionVideoEnd;
+        }
+
+        if (playerSetupTransitionVideoRoot != null)
+        {
+            playerSetupTransitionVideoRoot.SetActive(false);
+            Debug.Log("[PlayerSetupManager] playerSetupTransitionVideoRoot を非アクティブにしました。(動画終了時)");
+        }
+
+        ProceedToCardSelectionScreen();
+    }
+
+    private void ProceedToCardSelectionScreen()
+    {
+        Debug.Log("[PlayerSetupManager] 札選択画面へ移行します。");
+
+        // このプレイヤー設定画面を非表示にする
+        if (playerSetupCanvasObject != null)
+        {
+            playerSetupCanvasObject.SetActive(false);
+            Debug.Log($"[PlayerSetupManager] {playerSetupCanvasObject.name} を非表示にしました。");
+        }
+        // (else節はエラーログなのでそのまま)
+
+        // 次に表示する札選択画面のCanvasを表示する
+        if (cardSelectionCanvasObject != null)
+        {
+            cardSelectionCanvasObject.SetActive(true);
+            Debug.Log($"[PlayerSetupManager] 次の画面として {cardSelectionCanvasObject.name} を表示しました。");
+
+            // WordSelectionManager の初期化処理を呼び出す
+            WordSelectionManager wordSelector = FindObjectOfType<WordSelectionManager>();
+            if (wordSelector != null)
+            {
+                wordSelector.InitializeAndDisplayCards();
+                Debug.Log("[PlayerSetupManager] WordSelectionManagerのInitializeAndDisplayCardsを呼び出しました。");
+            }
+            // (else節はエラーログなのでそのまま)
+        }
+        // (else節はエラーログなのでそのまま)
+
+        // Undoボタンの表示制御 (これはWordSelectionManagerに任せるので、ここでは不要かも)
+        // if (undoCardSelectionButton != null) 
+        // {
+        //     undoCardSelectionButton.gameObject.SetActive(true); 
+        // }
+    }
 }
