@@ -2,9 +2,10 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using UnityEngine.EventSystems;
-using System.Collections.Generic; // ← ★★★この行を確認・追加してください★★★
-
-public class WordCardUI : MonoBehaviour, IPointerClickHandler
+using System.Collections.Generic;
+using System.Collections;
+using UnityEngine.Rendering; // コルーチン (IEnumerator) を使うために必要
+public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHandler, IPointerExitHandler
 {
     [Header("UI部品（インスペクターで設定）")]
     public TextMeshProUGUI cardNumberText;
@@ -13,6 +14,8 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
     public TextMeshProUGUI wordColumn3_Left;
     public Image cardBackgroundImage;
     public Button cardButton; // クリックを検知し、interactableを制御するために使う
+
+
 
     [Header("表示設定（インスペクターで設定）")]
     public int charsPerColumn = 5;
@@ -25,9 +28,13 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
     private Canvas cardCanvas;
     private int originalSortOrder;
     private const int HIGHLIGHT_SORT_ORDER_OFFSET = 10; // 拡大表示時に加算するソート順
+    private const int ENLARGE_SORT_ORDER_OFFSET = 20; // ★この行を追加★ (HIGHLIGHT_SORT_ORDER_OFFSETより大きい値)
+
 
     private Color originalBackgroundColor; // ★追加★ 元の背景色を覚えておく
-
+    private Animator animator; // アニメーション制御用
+    private QuizPhaseManager quizPhaseManager; // QuizPhaseManagerの参照用
+    private bool isConfirmedForOkurifuda = false; // この札が送り札として確定済みかどうか
 
     //private Transform originalParent;       // この札の元の親（CardGridのはず）を覚えておく箱
     //private int originalSiblingIndex;     // この札の元の並び順を覚えておく箱
@@ -80,7 +87,19 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
         {
             originalBackgroundColor = cardBackgroundImage.color; // ★初期の背景色を記憶★
         }
+        animator = GetComponent<Animator>();
+
+        if (animator == null)
+        {
+            Debug.LogWarning($"WordCardUI ({gameObject.name}): Animatorコンポーネントが見つかりません。");
+        }
+        quizPhaseManager = FindObjectOfType<QuizPhaseManager>();
+        if (quizPhaseManager == null)
+        {
+            Debug.LogError($"WordCardUI ({gameObject.name}): QuizPhaseManagerが見つかりません！");
+        }
     }
+
 
     public void SetCardData(string number, string word)
     {
@@ -116,6 +135,20 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
 
     public void OnPointerClick(PointerEventData eventData)
     {
+        if (isConfirmedForOkurifuda) // ★この行を追加★ もし既に送り札として確定済みなら
+        {
+            Debug.Log($"[WordCardUI:{gameObject.name}] 既に送り札として確定済みのため、クリック処理をスキップします。");
+            return; // 何もしない
+        }
+
+        if (quizPhaseManager != null && quizPhaseManager.IsOkurifudaSelectionModeNow()) // QuizPhaseManagerに送り札選択モードか確認するメソッドを後で追加
+        {
+            // 送り札選択モード中のクリック処理
+            Debug.Log($"[WordCardUI:{gameObject.name}] 送り札選択モード中にクリックされました。");
+            quizPhaseManager.HandleOkurifudaCandidateSelection(this); // 選択されたこの WordCardUI を QuizPhaseManager に通知
+            return; // 送り札選択モード中の処理はここで終わり
+        }
+        // ★★★↑ここまで追加・変更↑★★★
         // ★↓まず、この札にアタッチされているButtonコンポーネントが操作不可なら、何もしない↓★
         if (cardButton != null && !cardButton.interactable)
         {
@@ -181,6 +214,8 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
     {
         Debug.Log($"WordCardUI ({gameObject.name}): 選択状態をリセットします。");
         isTeamSelected = false;
+        isConfirmedForOkurifuda = false; // ★この行を追加★
+
 
         if (cardBackgroundImage != null)
         {
@@ -220,24 +255,273 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler
             cardCanvas.overrideSorting = false;
             cardCanvas.sortingOrder = originalSortOrder;
         }
-        Debug.Log($"札「{GetCardNumber()}」をPlayableCanvas用に表示設定（色:元のまま, 操作不可）。");
+        //Debug.Log($"札「{GetCardNumber()}」をPlayableCanvas用に表示設定（色:元のまま, 操作不可）。");
     }
-    // WordDataManager.cs
+    public IEnumerator PlayEnlargeAnimation(float targetScaleFactor, float duration, Vector3 targetPosition) // ★戻り値を IEnumerator に変更★
+    {
+        //Debug.Log($"[WordCardUI:{gameObject.name}] PlayEnlargeAnimation が呼ばれました。目標スケール: {targetScaleFactor}, 時間: {duration}秒,目標位置: {targetPosition}");
 
-  
-        
-        // 確認用ログ (必要ならコメントアウト解除)
-        // if (EmptyCardsList.Count > 0)
-        // {
-        //     Debug.Log("--- 決定された空札リスト ---");
-        //     foreach(var emptyCard in EmptyCardsList) 
-        //     { 
-        //         Debug.Log($"空札: 番号={emptyCard.DisplayNumber}, ワード={emptyCard.Word}"); 
-        //     }
-        // }
+        // ▼▼▼ ここからログとチェックを追加 ▼▼▼
+        if (this == null)
+        {
+            Debug.LogError($"[WordCardUI:{gameObject.name}] PlayEnlargeAnimation: this (WordCardUI自身) が null です！コルーチンを開始できません。");
+            yield break;//コルーチンを終了
+        }
+        if (!gameObject.activeInHierarchy) // GameObjectが階層内でアクティブか確認
+        {
+            Debug.LogWarning($"[WordCardUI:{gameObject.name}] PlayEnlargeAnimation: GameObjectが非アクティブです！コルーチンを開始できません。Name: {gameObject.name}");
+            yield break;//コルーチンを終了
+
+        }
+        if (!enabled) // このMonoBehaviourが有効か確認
+        {
+            Debug.LogWarning($"[WordCardUI:{gameObject.name}] PlayEnlargeAnimation: このスクリプト(WordCardUI)が無効(enabled=false)です！コルーチンを開始できません。Name: {gameObject.name}");
+            yield break;//コルーチンを終了
+
+        }
+
+        //Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardTransform コルーチンを開始します。GameObjectはアクティブ: {gameObject.activeSelf}, スクリプトenabled: {enabled}");
+
+        // AnimateCardTransformコルーチンを開始し、その終了を待つ
+        yield return StartCoroutine(AnimateCardTransform(targetScaleFactor, duration, targetPosition)); // ★StartCoroutineの呼び出しはここに1回だけ！★
+
+        //Debug.Log($"[WordCardUI:{gameObject.name}] PlayEnlargeAnimation の AnimateCardTransform が完了しました。");
     }
-    // ★↑ここまで新しい関数↑★
-    // ★↑ここまで↑★
+    // WordCardUI.cs の中
 
+    // クラスのメンバー変数を宣言している箇所に、以前追加した定数があることを確認してください。
+    // private const int HIGHLIGHT_SORT_ORDER_OFFSET = 10;
+    // private const int ENLARGE_SORT_ORDER_OFFSET = 20; // ←これを使います
 
+    private IEnumerator AnimateCardTransform(float targetScaleFactor, float duration, Vector3 targetPositionScreenSpace)
+    {
+        Vector3 originalScale = transform.localScale;
+        Vector3 targetScale = originalScale * targetScaleFactor;
+        Vector3 originalPosition = transform.localPosition;
+        // 今回の「正解札の拡大表示」では、まず「その場で拡大」を試みるので、目標位置は現在の位置のままです。
+        // 「画面中央へ移動」は、この後のステップで targetPositionScreenSpace を使って調整します。
+        Vector3 targetPositionLocal = originalPosition;
 
+        // ★★★ ソート順変更処理（アニメーション開始時）★★★
+        int previousSortingOrderBeforeEnlarge = 0; // 拡大直前のソート順を記憶（デバッグ用や、もし厳密に戻したい場合）
+        if (cardCanvas != null)
+        {
+            previousSortingOrderBeforeEnlarge = cardCanvas.sortingOrder; // 現在の値を記憶
+            cardCanvas.overrideSorting = true;          // ソート順の上書きを有効にする
+                                                        // originalSortOrder は Awake() で取得した、このカードのGrid内での基準のソート順
+            cardCanvas.sortingOrder = originalSortOrder + ENLARGE_SORT_ORDER_OFFSET;
+            //Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardTransform: 拡大のためソート順を {cardCanvas.sortingOrder} に変更 (拡大前のソート順: {previousSortingOrderBeforeEnlarge}, この札の基準ソート順: {originalSortOrder})");
+        }
+        // ★★★ ソート順変更処理ここまで ★★★
+
+        //Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardTransform コルーチン開始。現在のスケール: {originalScale}, 目標スケール: {targetScale}");
+
+        float elapsedTime = 0f;
+        while (elapsedTime < duration)
+        {
+            float t = elapsedTime / duration;
+            // イージングを加えると、より滑らかな動きになりますが、まずは線形補間(Lerp)で。
+            t = Mathf.SmoothStep(0.0f, 1.0f, t); // 例：スムーズな開始と終了
+            transform.localScale = Vector3.Lerp(originalScale, targetScale, t);
+            transform.localPosition = Vector3.Lerp(originalPosition, targetPositionLocal, t);
+
+            elapsedTime += Time.deltaTime;
+            yield return null; // 1フレーム待つ
+        }
+
+        // アニメーション終了後、正確に目標値に設定
+        transform.localScale = targetScale;
+        transform.localPosition = targetPositionLocal;
+
+        //Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardTransform 完了。スケール: {transform.localScale}, 位置: {transform.localPosition}, 現在のソート順: {(cardCanvas != null ? cardCanvas.sortingOrder.ToString() : "N/A")}");
+
+    }
+
+    public IEnumerator PlayReturnToNormalAnimation(float duration) // ★戻り値を IEnumerator に、引数にアニメーション時間を追加★
+    {
+        Debug.Log($"[WordCardUI:{gameObject.name}] PlayReturnToNormalAnimation が呼ばれました。時間: {duration}秒");
+
+        // GameObjectやスクリプトが有効かどうかのチェック (PlayEnlargeAnimationと同様)
+        if (this == null)
+        {
+            Debug.LogError($"[WordCardUI:{gameObject.name}] PlayReturnToNormalAnimation: this が null です！");
+            yield break;
+        }
+        if (!gameObject.activeInHierarchy)
+        {
+            Debug.LogWarning($"[WordCardUI:{gameObject.name}] PlayReturnToNormalAnimation: GameObject「{gameObject.name}」が非アクティブです！");
+            yield break;
+        }
+        if (!enabled)
+        {
+            Debug.LogWarning($"[WordCardUI:{gameObject.name}] PlayReturnToNormalAnimation: このスクリプトが無効(enabled=false)です！ Name: {gameObject.name}");
+            yield break;
+        }
+
+        // 新しいコルーチンを開始し、その完了を待つ
+        yield return StartCoroutine(AnimateCardReturnToNormal(duration));
+
+        Debug.Log($"[WordCardUI:{gameObject.name}] PlayReturnToNormalAnimation の AnimateCardReturnToNormal が完了しました。");
+    }
+
+    // ★★★↓新しいコルーチンメソッドをここに追加します↓★★★
+    private IEnumerator AnimateCardReturnToNormal(float duration)
+    {
+        Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardReturnToNormal コルーチン開始。目標スケール: {initialScale}, 目標位置: (元の位置), 時間: {duration}秒");
+
+        Vector3 currentScale = transform.localScale;
+        // Vector3 currentPosition = transform.localPosition; // 位置もアニメートする場合
+
+        // ソート順を元に戻す (拡大表示で上げたものを、基準のソート順に戻す)
+        if (cardCanvas != null)
+        {
+            cardCanvas.sortingOrder = originalSortOrder;
+
+            Debug.Log($"[WordCardUI:{gameObject.name}] ソート順を基準値 {originalSortOrder} に戻しました。");
+        }
+
+        float elapsedTime = 0f;
+        while (elapsedTime < duration)
+        {
+            float t = elapsedTime / duration;
+            transform.localScale = Vector3.Lerp(currentScale, initialScale, t); // initialScale に戻す
+                                                                                // transform.localPosition = Vector3.Lerp(currentPosition, originalGridPosition, t); // もし元のGrid位置に戻すなら
+
+            elapsedTime += Time.deltaTime;
+            yield return null;
+        }
+
+        transform.localScale = initialScale; // 確実に元のスケールに
+                                             // transform.localPosition = originalGridPosition; // 確実に元の位置に
+
+        Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardReturnToNormal 完了。スケール: {transform.localScale}");
+        yield break; // コルーチンの終わりを明確に
+    }
+
+    public void SetSelectedForOkurifuda(bool isSelected)
+    {
+        if (cardBackgroundImage == null) // 背景画像が設定されていなければ何もしない
+        {
+            Debug.LogWarning($"[WordCardUI:{gameObject.name}] cardBackgroundImageが未設定のため、選択状態の色変更ができません。");
+            return;
+        }
+
+        if (isSelected)
+        {
+            Debug.Log($"[WordCardUI:{gameObject.name}] 送り札候補として選択状態になりました。");
+            cardBackgroundImage.color = new Color(0.8f, 1f, 0.8f); // ★例：選択中は背景を緑色にする★
+                                                                   // (この色はにぃぬさんのお好みで変えてください。例: new Color(0.8f, 1f, 0.8f) などで薄緑にもできます)
+        }
+        else
+        {
+            Debug.Log($"[WordCardUI:{gameObject.name}] 送り札候補の選択状態が解除されました。");
+            cardBackgroundImage.color = originalBackgroundColor; // ★元の背景色に戻す★
+                                                                 // (originalBackgroundColor は Awake で記憶した初期色です)
+        }
+    }
+    // マウスカーソルがこのUI要素の上に乗った時に呼び出される
+    public void OnPointerEnter(PointerEventData eventData)
+    {
+        // quizPhaseManager の参照がなければ何もしない (Awakeで取得しているはず)
+        if (quizPhaseManager == null) return;
+
+        if (quizPhaseManager.IsOkurifudaSelectionModeNow()) // ★現在が送り札選択モードか確認★
+        {
+            // --- 送り札選択モード中のマウスオーバー処理 ---
+            //Debug.Log($"[WordCardUI:{gameObject.name}] 送り札選択モード中にマウスが乗りました。");
+
+            // ★★★↓ここから変更↓★★★
+            if (quizPhaseManager.IsCardValidForOkurifudaSelectionHover(this)) // QuizPhaseManagerに問い合わせる
+            {
+                if (initialScale == Vector3.zero)
+                {
+                    if (transform.localScale == Vector3.zero) return;
+                }
+                transform.localScale = initialScale * 2.0f;
+
+                if (cardCanvas != null)
+                {
+                    cardCanvas.overrideSorting = true;
+                    cardCanvas.sortingOrder = originalSortOrder + HIGHLIGHT_SORT_ORDER_OFFSET;
+                }
+            }
+        }
+        else
+        {
+            // --- 通常のワード選択フェイズ中のマウスオーバー処理（既存のロジック） ---
+            //Debug.Log($"[WordCardUI:{gameObject.name}] 通常モード中にマウスが乗りました (OnPointerEnter)");
+            if (isTeamSelected || (cardButton != null && !cardButton.interactable))
+            {
+                return;
+            }
+            if (initialScale == Vector3.zero)
+            {
+                if (transform.localScale == Vector3.zero) return;
+            }
+            transform.localScale = initialScale * 2.0f;
+
+            if (cardCanvas != null)
+            {
+                cardCanvas.overrideSorting = true;
+                cardCanvas.sortingOrder = originalSortOrder + HIGHLIGHT_SORT_ORDER_OFFSET;
+                // Debug.Log($"[WordCardUI:{gameObject.name}] マウスオーバーのためソート順を {cardCanvas.sortingOrder} に変更");
+            }
+        }
+    }
+
+    // マウスカーソルがこのUI要素の上から離れた時に呼び出される
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        // quizPhaseManager の参照がなければ何もしない
+        if (quizPhaseManager == null) return;
+
+        if (quizPhaseManager.IsOkurifudaSelectionModeNow())
+        {
+            // --- 送り札選択モード中のマウスアウト処理 ---
+            //Debug.Log($"[WordCardUI:{gameObject.name}] 送り札選択モード中にマウスが離れました。");
+            // TODO: 送り札選択モード中の縮小条件（例：選択候補になっていなければ元に戻すなど）
+            //       現状は、送り札選択モード中なら、どの札からマウスが離れても一旦元のスケールに戻す
+            if (initialScale != Vector3.zero)
+            {
+                transform.localScale = initialScale;
+            }
+            if (cardCanvas != null)
+            {
+                // isTeamSelected は送り札選択モードでは使わない想定なので、単純に元に戻す
+                cardCanvas.sortingOrder = originalSortOrder;
+                // Debug.Log($"[WordCardUI:{gameObject.name}] 送り札選択マウスアウトのためソート順を {cardCanvas.sortingOrder} に戻しました。");
+            }
+        }
+        else
+        {
+            // --- 通常のワード選択フェイズ中のマウスアウト処理（既存のロジック） ---
+            //Debug.Log($"[WordCardUI:{gameObject.name}] 通常モード中にマウスが離れました (OnPointerExit)");
+            if (!isTeamSelected && (cardButton == null || cardButton.interactable))
+            {
+                if (initialScale != Vector3.zero)
+                {
+                    transform.localScale = initialScale;
+                }
+                if (cardCanvas != null)
+                {
+                    cardCanvas.sortingOrder = originalSortOrder;
+                    // Debug.Log($"[WordCardUI:{gameObject.name}] マウスアウトのためソート順を {cardCanvas.sortingOrder} に戻しました。");
+                }
+            }
+        }
+    }
+    public void SetConfirmedForOkurifuda()
+    {
+        if (cardBackgroundImage == null)
+        {
+            Debug.LogWarning($"[WordCardUI:{gameObject.name}] cardBackgroundImageが未設定のため、確定状態の色変更ができません。");
+            return;
+        }
+
+        Debug.Log($"[WordCardUI:{gameObject.name}] 送り札として【確定】されました。背景色を黄色に変更します。");
+        cardBackgroundImage.color = Color.yellow;
+        isConfirmedForOkurifuda = true; // ★この行を追加★
+
+    }
+
+}
