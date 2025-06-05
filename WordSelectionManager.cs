@@ -1,7 +1,8 @@
 using UnityEngine;
-using System.Collections.Generic;
 using TMPro;
 using UnityEngine.UI;
+using System.Collections;
+using System.Collections.Generic;
 
 public class WordSelectionManager : MonoBehaviour
 {
@@ -14,8 +15,8 @@ public class WordSelectionManager : MonoBehaviour
     public TextMeshProUGUI currentSelectingPlayerNameDisplayText;
 
     [Header("札選択の管理")]
-    public float selectedCardScaleFactor = 1.1f;
-    public Color genjiTeamColor = Color.blue;
+    public float selectedCardScaleFactor = 2.0f;
+    public Color genjiTeamColor = new Color(200f / 255f, 100f / 255f, 100f / 255f);
     public Color heishiTeamColor = Color.red;
     public Transform enlargedCardHolder; // ★拡大表示された札を置く親のTransform★
 
@@ -48,17 +49,23 @@ public class WordSelectionManager : MonoBehaviour
     private int lastConfirmedCardTeamIndex = -1; // 直前に札を「確定」したチームのインデックス
     private int previousGenjiPlayerSelectIndex = 0;  // 札が確定される「前」の源氏インデックス
     private int previousHeishiPlayerSelectIndex = 0; // 札が確定される「前」の平氏インデックス
-                                                     
+
     [Header("画面遷移（インスペクターで設定）")]
     public GameObject wordSelectionCanvasObject; // この札選択画面自身のCanvas
     public GameObject playerSetupCanvasObject; // ★追加★ 戻り先のプレイヤー設定画面のCanvas
-
     public GameObject quizAnsweringCanvasObject; // 次に進むクイズ解答画面のCanvas
     public Button goToQuizAnsweringButton;     // 「クイズ解答へ進む」ボタン
     public Button returnToPlayerSetupButton; // ★追加★ 「プレイヤー設定に戻る」ボタン
 
-        // ★↓ここから新しい変数を「正しく」追加します↓★
- 
+    // WordSelectionManager.cs のメンバー変数宣言部分
+    [Header("合戦開始動画演出（インスペクターで設定）")]
+    public GameObject startBattleVideoRoot;
+    public UnityEngine.Video.VideoClip startBattleVideoClip;
+    public UnityEngine.Video.VideoPlayer startBattleVideoPlayer; // ★★★この行を追加します★★★
+
+
+    // ★↓ここから新しい変数を「正しく」追加します↓★
+
 
     void OnEnable()
     {
@@ -144,14 +151,14 @@ public class WordSelectionManager : MonoBehaviour
             goToQuizAnsweringButton.gameObject.SetActive(false); // 最初は非表示
             // goToQuizAnsweringButton.interactable = false; // または最初は押せない
         }
-                // ★↓「プレイヤー設定に戻る」ボタンのリスナー設定↓★
+        // ★↓「プレイヤー設定に戻る」ボタンのリスナー設定↓★
         if (returnToPlayerSetupButton != null)
         {
             // もしリスナーが重複して登録されるのを防ぎたい場合は、一度削除してから追加する
             // returnToPlayerSetupButton.onClick.RemoveAllListeners(); 
             returnToPlayerSetupButton.onClick.AddListener(OnReturnToPlayerSetupButtonClicked);
         }
-        
+
         // ★↑ここまで↑★
     }
 
@@ -194,9 +201,9 @@ public class WordSelectionManager : MonoBehaviour
             // clickedCard.SetHighlighted(false, 1f); // SetSelectedByTeam の中でスケールも戻るはず
             clickedCard.SetSelectedByTeam(teamColor); // 色を変えて選択不可に (この中で元のスケールに戻る)
 
-            UpdateCardsSelectedDisplay(); 
+            UpdateCardsSelectedDisplay();
 
-                        // ★↓ここから WordDataManager に獲得した札の情報を保存する処理を追加↓★
+            // ★↓ここから WordDataManager に獲得した札の情報を保存する処理を追加↓★
             if (WordDataManager.Instance != null)
             {
                 string teamInitial = (currentPlayerTurnTeamIndex == 0) ? "A" : "B";
@@ -256,7 +263,7 @@ public class WordSelectionManager : MonoBehaviour
                 Debug.Log($"合計選択枚数が{TOTAL_CARDS_TO_TRIGGER_LOCK}枚に達しました。札選択フェイズ終了。残りの札をロックします。");
                 SetAllUnselectedCardsInteractable(false); // 残りの札（空札のはず）をロック
 
-                                // ★↓ここが重要！この呼び出しがありますか？↓★
+                // ★↓ここが重要！この呼び出しがありますか？↓★
                 if (WordDataManager.Instance != null)
                 {
                     WordDataManager.Instance.FinalizeCardSelectionAndDetermineEmptyCards();
@@ -304,7 +311,7 @@ public class WordSelectionManager : MonoBehaviour
             string playerName = GetCurrentPlayerName(); // 現在のプレイヤー名を取得
 
             // ★↓表示するテキストを、プレイヤー名だけにします↓★
-            currentSelectingPlayerNameDisplayText.text = playerName;
+            currentSelectingPlayerNameDisplayText.text = $"{playerName}の番";
             // ★↑ここまで↑★
 
             // 文字色をチームカラーに設定 (これはそのまま)
@@ -320,7 +327,7 @@ public class WordSelectionManager : MonoBehaviour
 
     string GetCurrentTeamNameForDisplay() // ログや表示用のチーム名取得ヘルパー
     {
-        return (currentPlayerTurnTeamIndex == 0) ? "源氏軍" : "平氏軍";
+        return (currentPlayerTurnTeamIndex == 0) ? "源氏軍の札選択順" : "平氏軍の札選択順";
     }
 
     string GetCurrentPlayerName()
@@ -462,7 +469,7 @@ public class WordSelectionManager : MonoBehaviour
             return;
         }
 
-        UpdateCardsSelectedDisplay(); 
+        UpdateCardsSelectedDisplay();
 
         Debug.Log($"★★ WordSelectionManager: Undo処理開始 - 札「{lastConfirmedCard.GetCardNumber()}」の選択を取り消します。★★");
 
@@ -530,44 +537,60 @@ public class WordSelectionManager : MonoBehaviour
     // 「クイズ解答へ進む」ボタンが押された時のお仕事
     public void OnGoToQuizAnsweringButtonClicked()
     {
-        Debug.Log("「クイズ解答へ進む」ボタンが押されました。クイズ解答画面へ移行します。");
+        Debug.Log("「クイズ解答へ進む」ボタンが押されました。");
 
-        // この札選択画面を非表示にする
+        if (goToQuizAnsweringButton != null)
+        {
+            goToQuizAnsweringButton.interactable = false;
+        }
+
+        // ★★★↓ここから画面の表示/非表示処理を先に行います↓★★★
+        // 1. まず、現在の札選択画面を非表示にする
         if (wordSelectionCanvasObject != null)
         {
             wordSelectionCanvasObject.SetActive(false);
+            Debug.Log("[WordSelectionManager] 札選択画面を非表示にしました。");
         }
         else
         {
-            Debug.LogError("WordSelectionManager: wordSelectionCanvasObject（この画面自身のCanvas）がInspectorで設定されていません！");
+            Debug.LogError("WordSelectionManager: wordSelectionCanvasObject（札選択画面のCanvas）がInspectorで設定されていません！");
+            // 札選択画面を非表示にできないと、次の画面と重なってしまう可能性があります。
+            // しかし、動画再生やクイズ開始は試みるかもしれません。
         }
 
-        // クイズ解答画面を表示する
+        // 2. 次に、動画が表示されるべきCanvas（quizAnsweringCanvasObjectがPlayable_Canvasを指している）をアクティブにする
+        //    (この処理は PlayStartBattleVideoAndProceed コルーチンの最初でも行っていますが、
+        //     ここで明示的に行うことで、コルーチン開始前にCanvasが確実にアクティブになります。)
         if (quizAnsweringCanvasObject != null)
         {
-            quizAnsweringCanvasObject.SetActive(true);
-            // ここで、クイズ解答画面の初期化処理を呼び出す（もしあれば）
-            // QuizAnsweringManager quizMgr = FindObjectOfType<QuizAnsweringManager>();
-            // if (quizMgr != null) { quizMgr.StartQuizPhase(); }
+            if (!quizAnsweringCanvasObject.activeSelf)
+            {
+                quizAnsweringCanvasObject.SetActive(true);
+                Debug.Log("[WordSelectionManager] 動画再生のため、quizAnsweringCanvasObject (Playable_Canvas) をアクティブにしました。");
+            }
         }
         else
         {
-            Debug.LogError("WordSelectionManager: quizAnsweringCanvasObject（クイズ解答画面のCanvas）がInspectorで設定されていません！");
+            Debug.LogError("[WordSelectionManager] quizAnsweringCanvasObject (動画再生用のCanvas) が null です！");
+            // この場合、動画再生もクイズ本編も難しいので、ここで処理を中断することも検討できます。
+            // StartQuizPhase(); // 例えば、エラーでもクイズロジックだけは動かそうとする場合など
+            return;
         }
-                    // ★↓ここから QuizPhaseManager の SetupPlayers を呼び出す処理を追加します↓★
-            QuizPhaseManager quizManager = FindObjectOfType<QuizPhaseManager>(); // シーン内からQuizPhaseManagerを探す
-            if (quizManager != null)
-            {
-                Debug.Log("WordSelectionManager: QuizPhaseManager を発見。SetupPlayers() を呼び出します。");
-                quizManager.SetupPlayers(); // これでプレイヤー情報がセットアップされるはず
-            }
-            else
-            {
-                Debug.LogError("WordSelectionManager: QuizPhaseManager のインスタンスが見つかりません！クイズの準備ができません。");
-            }
-            // ★↑ここまで追加↑★
+        // ★★★↑ここまで画面の表示/非表示処理↑★★★
+
+        // 3. その後、動画再生を開始する
+        if (startBattleVideoRoot != null & startBattleVideoPlayer != null && startBattleVideoClip != null)
+        {
+            Debug.Log("[WordSelectionManager] 合戦開始動画の再生準備を開始します。");
+            StartCoroutine(PlayStartBattleVideoAndProceed());
+        }
+        else
+        {
+            Debug.LogError("[WordSelectionManager] 合戦開始動画の再生に必要な参照が設定されていません。動画をスキップしてクイズを開始します。");
+            StartQuizPhase();
+        }
     }
-　　　// 「プレイヤー設定に戻る」ボタンが押された時のお仕事
+    // 「プレイヤー設定に戻る」ボタンが押された時のお仕事
     public void OnReturnToPlayerSetupButtonClicked()
     {
         Debug.Log("「プレイヤー設定に戻る」ボタンが押されました。プレイヤー設定画面へ移行します。");
@@ -584,7 +607,7 @@ public class WordSelectionManager : MonoBehaviour
             // 拡大表示されていた札があれば元に戻す (SetHighlightedの第3引数は cardGridParent)
             // currentlyHighlightedCard.SetHighlighted(false, 1f, cardGridParent); 
             // ↑これは SetHighlighted が3引数の場合。現在の2引数の場合は以下でOK。
-            currentlyHighlightedCard.SetHighlighted(false, 1f); 
+            currentlyHighlightedCard.SetHighlighted(false, 1f);
             currentlyHighlightedCard = null;
         }
         UpdateCardsSelectedDisplay(); // 枚数表示もリセット
@@ -632,4 +655,160 @@ public class WordSelectionManager : MonoBehaviour
             Debug.LogError("WordSelectionManager: playerSetupCanvasObject（プレイヤー設定画面のCanvas）がInspectorで設定されていません！");
         }
     }
+
+    private void StartQuizPhase()
+    {
+        Debug.Log("[WordSelectionManager] クイズフェイズを開始します。");
+
+        // 1. この札選択画面を非表示にする
+        if (wordSelectionCanvasObject != null)
+        {
+            wordSelectionCanvasObject.SetActive(false);
+            // ...
+        }
+        // ...
+
+        // 2. クイズ解答画面を表示する
+        if (quizAnsweringCanvasObject != null)
+        {
+            quizAnsweringCanvasObject.SetActive(true);
+            // ...
+        }
+        // ...
+
+        // 3. QuizPhaseManager の初期化処理を呼び出す
+        QuizPhaseManager quizManager = FindObjectOfType<QuizPhaseManager>();
+        if (quizManager != null)
+        {
+            quizManager.SetupPlayers();
+            quizManager.LoadQuestion(0);  // 最初の問題をロード
+        }
+        // ...
+    }
+
+    private IEnumerator PlayStartBattleVideoAndProceed()
+    {
+        Debug.Log("[WordSelectionManager] 合戦開始動画の再生を開始します。(コルーチン開始)");
+
+        // 0. まず、動画が表示されるべき大元のCanvas（quizAnsweringCanvasObject）をアクティブにする
+        //    （これは OnGoToQuizAnsweringButtonClicked メソッドの最初で行うように変更したので、ここでは不要かもしれません。
+        //     ただし、念のため、またはこのコルーチンが単独で呼ばれる可能性も考慮するなら残してもOKです。）
+        if (quizAnsweringCanvasObject == null)
+        {
+            Debug.LogError("[WordSelectionManager] quizAnsweringCanvasObject (動画再生用のCanvas) が null です！動画再生できません。");
+            StartQuizPhase(); // エラーなので動画なしでクイズへ
+            yield break;
+        }
+        if (!quizAnsweringCanvasObject.activeSelf)
+        {
+            quizAnsweringCanvasObject.SetActive(true);
+            Debug.Log("[WordSelectionManager] 動画再生のため、quizAnsweringCanvasObject (Playable_Canvas) をアクティブにしました。");
+            yield return null; // Canvasのアクティブ化を1フレーム待つ
+        }
+
+        // 1. 次に、動画表示用の親GameObject (startBattleVideoRoot) の有効化
+        if (startBattleVideoRoot == null)
+        {
+            Debug.LogError("[WordSelectionManager] startBattleVideoRoot (動画の親オブジェクト) が null です！動画再生できません。");
+            StartQuizPhase();
+            yield break;
+        }
+        if (!startBattleVideoRoot.activeSelf)
+        {
+            startBattleVideoRoot.SetActive(true);
+            Debug.Log("[WordSelectionManager] startBattleVideoRoot をアクティブにしました。");
+        }
+        yield return null; // startBattleVideoRootのアクティブ化も1フレーム待つ
+
+        // 2. VideoPlayerとそのGameObjectがアクティブか確認し、必要ならアクティブにする
+        if (startBattleVideoPlayer == null)
+        {
+            Debug.LogError("[WordSelectionManager] startBattleVideoPlayer参照がnullです！動画再生できません。");
+            if (startBattleVideoRoot != null) startBattleVideoRoot.SetActive(false); // 親を非アクティブに戻す
+            StartQuizPhase();
+            yield break;
+        }
+        if (!startBattleVideoPlayer.gameObject.activeInHierarchy)
+        {
+            Debug.LogWarning($"[動画準備] {startBattleVideoPlayer.gameObject.name} (VideoPlayerのGameObject) が階層的に非アクティブだったので、強制的にアクティブにします。Root IsActive: {startBattleVideoRoot.activeSelf}");
+            startBattleVideoPlayer.gameObject.SetActive(true);
+            yield return null; // 子のアクティブ化も1フレーム待つ
+        }
+        if (!startBattleVideoPlayer.enabled)
+        {
+            Debug.LogWarning($"[動画準備] VideoPlayerコンポーネントが無効だったので、強制的に有効にします。");
+            startBattleVideoPlayer.enabled = true;
+            yield return null;
+        }
+
+        // 3. 最終的な状態確認ログ (Prepare直前)
+        Debug.LogWarning($"[動画準備最終チェック] Prepare呼び出し直前 - Root Active: {startBattleVideoRoot.activeSelf}, PlayerImageGO ActiveInHierarchy: {startBattleVideoPlayer.gameObject.activeInHierarchy}, VideoPlayerComp Enabled: {startBattleVideoPlayer.enabled}");
+
+        // 4. VideoPlayerの設定と再生準備
+        if (startBattleVideoClip == null)
+        {
+            Debug.LogError("[WordSelectionManager] startBattleVideoClip が null です！動画再生できません。");
+            if (startBattleVideoRoot != null) startBattleVideoRoot.SetActive(false);
+            StartQuizPhase();
+            yield break;
+        }
+
+        // Prepare()前に VideoPlayer が有効か最終チェック
+        if (startBattleVideoPlayer.gameObject.activeInHierarchy && startBattleVideoPlayer.enabled)
+        {
+            startBattleVideoPlayer.clip = startBattleVideoClip;
+            startBattleVideoPlayer.isLooping = false;
+
+            startBattleVideoPlayer.loopPointReached -= OnStartBattleVideoEnd;
+            startBattleVideoPlayer.loopPointReached += OnStartBattleVideoEnd;
+
+            startBattleVideoPlayer.Prepare();
+            Debug.Log("[WordSelectionManager] VideoPlayer.Prepare() を呼び出しました。");
+
+            float prepareWaitStartTime = Time.time;
+            while (!startBattleVideoPlayer.isPrepared)
+            {
+                if (Time.time - prepareWaitStartTime > 7f)
+                {
+                    Debug.LogError("[WordSelectionManager] VideoPlayer.Prepare() が7秒以上完了しませんでした。動画再生を中止します。");
+                    if (startBattleVideoRoot != null) startBattleVideoRoot.SetActive(false);
+                    StartQuizPhase();
+                    yield break;
+                }
+                yield return null;
+            }
+            Debug.Log("[WordSelectionManager] 合戦開始動画の準備完了。再生開始。");
+            startBattleVideoPlayer.Play();
+        }
+        else
+        {
+            Debug.LogError($"[WordSelectionManager] Prepare() を呼び出す直前でVideoPlayerが無効な状態です（最終チェック）。Root Active: {startBattleVideoRoot.activeSelf}, PlayerImageGO ActiveInHierarchy: {startBattleVideoPlayer.gameObject.activeInHierarchy}, VideoPlayerComp Enabled: {startBattleVideoPlayer.enabled}。動画再生を中止します。");
+            if (startBattleVideoRoot != null) startBattleVideoRoot.SetActive(false);
+            StartQuizPhase();
+        }
+        // 動画再生終了は OnStartBattleVideoEnd イベントハンドラで検知し、そこで StartQuizPhase() を呼び出すので、
+        // このコルーチンの最後で yield break; は不要です（OnStartBattleVideoEndが呼ばれれば自然に終了します）。
+    }
+    private void OnStartBattleVideoEnd(UnityEngine.Video.VideoPlayer vp)
+    {
+        Debug.Log("[WordSelectionManager] 合戦開始動画の再生が終了しました。(OnStartBattleVideoEndイベント)");
+
+        // 念のため、イベントリスナーを自分自身から解除（重複呼び出し防止）
+        if (vp != null) // vpがnullでないことを確認
+        {
+            vp.loopPointReached -= OnStartBattleVideoEnd;
+        }
+
+        // 動画表示用の親GameObjectを非アクティブにする
+        if (startBattleVideoRoot != null)
+        {
+            startBattleVideoRoot.SetActive(false);
+            Debug.Log("[WordSelectionManager] startBattleVideoRoot を非アクティブにしました。(動画終了時)");
+        }
+
+        // クイズフェイズを開始するメソッドを呼び出す
+        StartQuizPhase();
+    }
+
+
 }
