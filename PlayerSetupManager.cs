@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
 using System.Collections;
+using System;
 
 public class PlayerSetupManager : MonoBehaviour
 {
@@ -46,6 +47,28 @@ public class PlayerSetupManager : MonoBehaviour
     public GameObject playerSetupTransitionVideoRoot; // 動画の親GameObject
     public UnityEngine.Video.VideoPlayer playerSetupTransitionVideoPlayer; // 動画再生用のVideoPlayer
     public UnityEngine.Video.VideoClip playerSetupTransitionVideoClip; // 再生する動画クリップ
+
+    public void DebugAutoSetupPlayerInput()
+    {
+        genjiMaxAnswersInput.text = "10";
+        heishiMaxAnswersInput.text = "10";
+
+        genjiPlayerNameInputs[0].text = "高松　燈";
+        genjiPlayerNameInputs[1].text = "椎名立希";
+        genjiPlayerNameInputs[2].text = "千早愛音";
+        genjiPlayerNameInputs[3].text = "要　楽奈";
+        genjiPlayerNameInputs[4].text = "長崎そよ";
+        genjiPlayerNameInputs[5].text = "MyGo!!!!";
+
+        heishiPlayerNameInputs[0].text = "三角初華";
+        heishiPlayerNameInputs[1].text = "祐天寺にゃむ";
+        heishiPlayerNameInputs[2].text = "豊川祥子";
+        heishiPlayerNameInputs[3].text = "若葉　睦";
+        heishiPlayerNameInputs[4].text = "八幡海鈴";
+        heishiPlayerNameInputs[5].text = "AveMujica";
+
+        //OnGoToCardSelectButtonClicked();
+    }
 
     void Start()
     {
@@ -354,6 +377,5 @@ public class PlayerSetupManager : MonoBehaviour
         // if (undoCardSelectionButton != null) 
         // {
         //     undoCardSelectionButton.gameObject.SetActive(true); 
-        // }
     }
 }
