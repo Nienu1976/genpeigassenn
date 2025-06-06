@@ -1,50 +1,243 @@
 using UnityEngine;
 using System.Collections.Generic; // List を使うために必要
 using TMPro; // もし問題文などを表示するなら必要
+using UnityEngine.UI; // ← ★この行を追加します★
+using System.Collections;
+using UnityEngine.SceneManagement; // ★この行を追加★
+
+public enum CardLocationType
+{
+    None,    // どこにも見つからなかった
+    Genji,   // 源氏軍の陣地で見つかった
+    Heishi,  // 平氏軍の陣地で見つかった
+    Empty    // 空札で見つかった
+}
+
+// 見つかった札の情報をまとめて持つための報告書の型（構造体）
+public struct FoundCardInfo
+{
+    public CardLocationType Location; // どこで見つかったか
+    public int IndexInList;           // そのリストの何番目にあったか (見つからなければ -1)
+    public SelectableWordEntry Card;  // 見つかった札の情報そのもの (WordDataManagerで使っている型)
+
+    // 報告書を作るときの初期設定（コンストラクタ）
+    public FoundCardInfo(CardLocationType location, int index, SelectableWordEntry card)
+    {
+        Location = location;
+        IndexInList = index;
+        Card = card;
+    }
+}
+public struct PlayerStateSnapshot
+{
+    public int CorrectAnswers;      // その時点の正解数
+    public int IncorrectAnswers;    // その時点の誤答数
+    public bool CanAnswer;          // その時点の解答権
+    public bool HasReachedMaxAnswers; // その時点の完走状態
+
+    // メモ帳を作るときの初期設定（コンストラクタ）
+    public PlayerStateSnapshot(QuizPlayer player)
+    {
+        CorrectAnswers = player.CorrectAnswers;
+        IncorrectAnswers = player.IncorrectAnswers;
+        CanAnswer = player.CanAnswer;
+        HasReachedMaxAnswers = player.HasReachedMaxAnswers;
+    }
+}
 
 public class QuizPhaseManager : MonoBehaviour
 {
     public List<QuizPlayer> genjiPlayers = new List<QuizPlayer>();
     public List<QuizPlayer> heishiPlayers = new List<QuizPlayer>();
 
-    // ★↓ここから新しい変数を追加↓★
+
     [Header("正解数表示UI（インスペクターで設定、上から順に）")]
     public List<TextMeshProUGUI> genjiPlayerCorrectCountTexts;  // 源氏軍の各プレイヤーの正解数表示用
     public List<TextMeshProUGUI> heishiPlayerCorrectCountTexts; // 平氏軍の各プレイヤーの正解数表示用
-    // ★↑ここまで↑★
+                                                                // ★↑ここまで↑★
+                                                                // ★↓ここからボタンのリストを追加・変更します↓★
+    [Header("操作ボタン（インスペクターで設定、上から順に）")]
+    public List<Button> genjiPlayerCorrectButtons;  // 源氏軍の各プレイヤーの○ボタン
+    public List<Button> heishiPlayerCorrectButtons; // 平氏軍の各プレイヤーの○ボタン
+    public List<Button> genjiPlayerIncorrectButtons;  // 源氏軍の各プレイヤーの×ボタン
+    public List<Button> heishiPlayerIncorrectButtons; // 平氏軍の各プレイヤーの×ボタン    
+    public Button passButton; // ★この行を追加します (スルーボタン用)★
+    public Button nextQuestionButton; // ★この行を追加します★
+    public Button undoButton;
+    private bool isUndoButtonLocked = false; // Undoボタンが一時的にロック中かどうか
 
-    // このマネージャーが有効になったら（クイズ解答画面が表示されたら）呼ばれるお仕事
-    void OnEnable()
+    private bool areActionButtonsLocked = false; // ★新しいロック用のフラグを追加★
+
+    [Header("問題文表示UI（インスペクターで設定）")] // ← この行を追加 (他のHeaderと区別するため)
+    public TextMeshProUGUI currentQuestionDisplayText;    // ← そしてこの行を追加
+
+    [Header("問題表示演出オブジェクト（インスペクターで設定）")]
+    public GameObject QuestionAnimationRoot; // これが巻物と問題文をまとめる親オブジェクト
+
+    [Header("問題表示演出コンポーネント（インスペクターで設定）")] // ← この行は任意ですが、整理のため推奨
+    public Animator questionDisplayAnimator;         // 「makimono」や「Question_Text」にアタッチしたAnimatorコンポーネントを持つGameObject用
+    public UnityEngine.Video.VideoPlayer scrollVideoPlayer; // 「makimono」オブジェクトにアタッチしたVideo Playerコンポーネント用
+
+
+    // ★↓現在の問題に関する情報を記憶する変数を追加します↓★
+    private int currentQuestionIndex = -1; // 現在何問目か (0から始まるので、最初は-1などで未設定状態を示す)
+    private FullQuizDataEntry currentQuestionData; // 現在の問題データ（問題番号、問題文、答えのワードをまとめて持つ）
+                                                   // ★↑ここまで追加↑★
+                                                   // ★↓Undo機能のための変数を追加します↓★
+    private List<SelectableWordEntry> lastGenjiCardsState;
+    private List<SelectableWordEntry> lastHeishiCardsState;
+    private List<SelectableWordEntry> lastEmptyCardsState;
+    private bool canPerformUndo = false; // Undoが可能かどうかを示すフラ
+
+    // ★↓全プレイヤーの状態を覚えておくためのリストを追加します↓★
+    private List<PlayerStateSnapshot> lastGenjiPlayersSnapshot;
+    private List<PlayerStateSnapshot> lastHeishiPlayersSnapshot;
+    public PlayableCanvasManager playableCanvasManagerInstance; // ★名前を少し変えました (FindObjectOfTypeと区別するため)★
+
+    [Header("最終送り札表示UI（インスペクターで設定）")]
+    public GameObject finalOkurifudaDisplayGroup; // ★この行を新しく追加（または変更）★ 親グループのGameObject用
+    public TextMeshProUGUI finalOkurifudaDisplayText;
+
+    [Header("送り札選択フェイズ")]
+    private bool isOkurifudaSelectionMode = false;
+    private string currentOkurifudaSendingTeamInitial = ""; // "A" or "B"
+    private string currentOkurifudaSendingTeamName = ""; // "源氏" or "平氏" (ログや表示用)
+    private string currentOkurifudaReceivingTeamName = ""; // "源氏" or "平氏" (ログや表示用)
+    private int numberOfCardsToSelectForOkurifuda = 0; // 送るべき総枚数
+    private int remainingCardsToSelectForOkurifuda = 0; // 残り選択すべき枚数
+    private List<WordCardUI> selectedOkurifudaCandidates = new List<WordCardUI>(); // 選択された送り札候補を一時的に保持
+
+    [Header("勝利動画演出（インスペクターで設定）")]
+    public GameObject victoryVideoRoot; // 勝利動画の親GameObject (VictoryVideo_Root)
+    public UnityEngine.Video.VideoPlayer victoryVideoPlayer; // 勝利動画再生用のVideoPlayer (VictoryVideo_PlayerImage にアタッチされているもの)
+    public Button returnToSetupButton; // 「準備画面に戻る」ボタン (ReturnToSetup_Button)
+
+    [Header("勝利動画クリップ（インスペクターで設定）")]
+    public UnityEngine.Video.VideoClip genjiVictoryVideoClip; // 源氏軍勝利時の動画ファイル
+    public UnityEngine.Video.VideoClip heishiVictoryVideoClip; // 平氏軍勝利時の動画ファイル
+
+    private int lastCurrentQuestionGenjiOtetsukiCount;
+    private int lastCurrentQuestionHeishiOtetsukiCount;
+    private int lastCurrentQuestionOkurifudaFromGenji;
+    private int lastCurrentQuestionOkurifudaFromHeishi;
+    private int lastCurrentQuestionIndexForUndo = -1; // Undo用に直前の問題インデックスを保存
+
+    // Undo用に送り札選択モードの情報を保存
+    private bool wasLastActionOkurifudaSelectionMode = false;
+    private string lastOkurifudaSendingTeamInitial = "";
+    private string lastOkurifudaSendingTeamName = "";
+    private string lastOkurifudaReceivingTeamName = "";
+    private int lastNumberOfCardsToSelectForOkurifuda = 0;
+    private int lastRemainingCardsToSelectForOkurifuda = 0;
+
+    private enum QuizGamePhase
     {
-        //Debug.Log("★★★★ QuizPhaseManager: OnEnable() が【本当に】呼び出されました！ ★★★★"); 
-        //SetupPlayers();
+        Answering,       // プレイヤーが解答中のフェーズ
+        OkurifudaSelection, // 送り札を選んでいるフェーズ
+        OkurifudaCompleted, // 送り札が終わった直後の中立フェーズ
+        AnswerReady       // 次の問題が表示されたがまだ解答開始前
     }
 
-    // WordDataManagerからプレイヤー情報を読み込んで、QuizPlayerのリストを作るお仕事
+    // ★★この変数を QuizPhaseManager.cs のクラス内（例えば変数宣言エリアの下の方）に追加 ★★
+    private QuizGamePhase currentPhase = QuizGamePhase.Answering;  // 現在のフェーズ（初期は解答フェーズ）
+
+    private int lastIncorrectPlayerIndex = -1;
+    private string lastIncorrectTeamInitial = ""; // "A" or "B"
+
+
+    private FoundCardInfo FindMatchingCardLocation(string answerWord)
+    {
+        if (WordDataManager.Instance == null)
+        {
+            Debug.LogError("FindMatchingCardLocation: WordDataManagerのインスタンスが見つかりません。");
+            return new FoundCardInfo(CardLocationType.None, -1, new SelectableWordEntry());
+        }
+
+        //Debug.Log($"[探偵開始] 探す答えのワード: 「{answerWord}」 (長さ: {answerWord.Length})"); // ★追加：探すワードを明確に★
+
+        // 1. まず源氏軍の札リストを探す
+        List<SelectableWordEntry> genjiCards = WordDataManager.Instance.GenjiSelectedCards;
+        if (genjiCards != null)
+        {
+            for (int i = 0; i < genjiCards.Count; i++)
+            {
+                // ★↓ここから比較対象を詳しくログに出力します↓★
+                //Debug.Log($"[探偵チェック] 源氏軍札[{i}]「{genjiCards[i].Word}」(長さ:{genjiCards[i].Word.Length}) と比較中...");
+                if (genjiCards[i].Word == answerWord)
+                // ★↑ここまで変更（比較自体はそのまま）↑★
+                {
+                    Debug.Log($"探偵さんより: 「{answerWord}」は源氏軍の札[{i}]で見つかりました。");
+                    return new FoundCardInfo(CardLocationType.Genji, i, genjiCards[i]);
+                }
+            }
+        }
+
+        // 2. 次に平氏軍の札リストを探す
+        List<SelectableWordEntry> heishiCards = WordDataManager.Instance.HeishiSelectedCards;
+        if (heishiCards != null)
+        {
+            for (int i = 0; i < heishiCards.Count; i++)
+            {
+                // ★↓ここから比較対象を詳しくログに出力します↓★
+                Debug.Log($"[探偵チェック] 平氏軍札[{i}]「{heishiCards[i].Word}」(長さ:{heishiCards[i].Word.Length}) と比較中...");
+                if (heishiCards[i].Word == answerWord)
+                // ★↑ここまで変更↑★
+                {
+                    Debug.Log($"探偵さんより: 「{answerWord}」は平氏軍の札[{i}]で見つかりました。");
+                    return new FoundCardInfo(CardLocationType.Heishi, i, heishiCards[i]);
+                }
+            }
+        }
+
+        // 3. 最後に空札リストを探す
+        List<SelectableWordEntry> emptyCards = WordDataManager.Instance.EmptyCardsList;
+        if (emptyCards != null)
+        {
+            for (int i = 0; i < emptyCards.Count; i++)
+            {
+                // ★↓ここから比較対象を詳しくログに出力します↓★
+                Debug.Log($"[探偵チェック] 空札[{i}]「{emptyCards[i].Word}」(長さ:{emptyCards[i].Word.Length}) と比較中...");
+                if (emptyCards[i].Word == answerWord)
+                // ★↑ここまで変更↑★
+                {
+                    Debug.Log($"探偵さんより: 「{answerWord}」は空札[{i}]で見つかりました。");
+                    return new FoundCardInfo(CardLocationType.Empty, i, emptyCards[i]);
+                }
+            }
+        }
+
+        // どこにも見つからなかった場合
+        Debug.LogWarning($"探偵さんより: 「{answerWord}」は場のどの札にも見つかりませんでした。");
+        return new FoundCardInfo(CardLocationType.None, -1, new SelectableWordEntry());
+    }
+    [Header("お手つき数表示UI（インスペクターで設定）")] // ← この行を追加
+    public TextMeshProUGUI genjiOtetsukiDisplayText;    // ← この行を追加
+    public TextMeshProUGUI heishiOtetsukiDisplayText;   // ← この行を追加
+    private int currentQuestionGenjiOtetsukiCount = 0;
+    private int currentQuestionHeishiOtetsukiCount = 0;
+
+    // 他のメンバー変数の下あたり
+    private int currentQuestionOkurifudaFromGenji = 0; // 現在の問題で、源氏から平氏へ送るべき「相手札獲得による送り札」の枚数
+    private int currentQuestionOkurifudaFromHeishi = 0; // 現在の問題で、平氏から源氏へ送るべき「相手札獲得による送り札」の枚数
+    private WordCardUI lastClickedOkurifudaCandidate = null; // 送り札選択モードで最後に1回目にクリックされた札
+
+    public bool IsOkurifudaSelectionModeNow()
+    {
+        return isOkurifudaSelectionMode;
+    }
+
     public void SetupPlayers()
-    {   Debug.Log("★★★★ QuizPhaseManager: SetupPlayers() が【本当に】呼び出されました！ ★★★★"); 
+    {
+        Debug.Log("★★★★ QuizPhaseManager: SetupPlayers() が【本当に】呼び出されました！ ★★★★");
 
-    
-        // ★↓ここからデバッグログを追加します↓★
-        Debug.Log($"--- WordDataManagerからのプレイヤー情報 ---");
-        Debug.Log($"源氏軍 参加人数 (GenjiPlayerCount): {WordDataManager.Instance.GenjiPlayerCount}");
-        Debug.Log($"源氏軍 名前リストの数 (GenjiPlayerNames.Count): {WordDataManager.Instance.GenjiPlayerNames.Count}");
-        for(int idx = 0; idx < WordDataManager.Instance.GenjiPlayerNames.Count; idx++)
+        for (int idx = 0; idx < WordDataManager.Instance.GenjiPlayerNames.Count; idx++)
         {
-            Debug.Log($"源氏軍 名前[{idx}]: {WordDataManager.Instance.GenjiPlayerNames[idx]}");
+            //Debug.Log($"源氏軍 名前[{idx}]: {WordDataManager.Instance.GenjiPlayerNames[idx]}");
         }
-        Debug.Log($"源氏軍 一人あたり上限解答数 (GenjiMaxAnswersPerPlayer): {WordDataManager.Instance.GenjiMaxAnswersPerPlayer}");
+        for (int idx = 0; idx < WordDataManager.Instance.HeishiPlayerNames.Count; idx++)
+        {
+        }
 
-        Debug.Log($"平氏軍 参加人数 (HeishiPlayerCount): {WordDataManager.Instance.HeishiPlayerCount}");
-        Debug.Log($"平氏軍 名前リストの数 (HeishiPlayerNames.Count): {WordDataManager.Instance.HeishiPlayerNames.Count}");
-        for(int idx = 0; idx < WordDataManager.Instance.HeishiPlayerNames.Count; idx++)
-        {
-            Debug.Log($"平氏軍 名前[{idx}]: {WordDataManager.Instance.HeishiPlayerNames[idx]}");
-        }
-        Debug.Log($"平氏軍 一人あたり上限解答数 (HeishiMaxAnswersPerPlayer): {WordDataManager.Instance.HeishiMaxAnswersPerPlayer}");
-        Debug.Log($"------------------------------------");
-        // ★↑ここまでデバッグログを追加↑★
-    
 
         genjiPlayers.Clear();
         heishiPlayers.Clear();
@@ -69,12 +262,12 @@ public class QuizPhaseManager : MonoBehaviour
                         isLeader,
                         WordDataManager.Instance.GenjiMaxAnswersPerPlayer
                     ));
-                    Debug.Log($"源氏軍プレイヤー追加: {WordDataManager.Instance.GenjiPlayerNames[i]}, リーダー: {isLeader}, 上限解答: {WordDataManager.Instance.GenjiMaxAnswersPerPlayer}");
+                    //Debug.Log($"源氏軍プレイヤー追加: {WordDataManager.Instance.GenjiPlayerNames[i]}, リーダー: {isLeader}, 上限解答: {WordDataManager.Instance.GenjiMaxAnswersPerPlayer}");
                 }
-                            else // ★名前リストが不足している場合のログを追加★
-            {
-                Debug.LogWarning($"SetupPlayers: 源氏軍プレイヤー {i} の名前データがありません。GenjiPlayerNames.Count ({WordDataManager.Instance.GenjiPlayerNames.Count}) が不足しています。");
-            }
+                else // ★名前リストが不足している場合のログを追加★
+                {
+                    //Debug.LogWarning($"SetupPlayers: 源氏軍プレイヤー {i} の名前データがありません。GenjiPlayerNames.Count ({WordDataManager.Instance.GenjiPlayerNames.Count}) が不足しています。");
+                }
             }
 
         // 平氏軍のプレイヤー情報をセットアップ
@@ -89,69 +282,188 @@ public class QuizPhaseManager : MonoBehaviour
                     isLeader,
                     WordDataManager.Instance.HeishiMaxAnswersPerPlayer
                 ));
-                Debug.Log($"平氏軍プレイヤー追加: {WordDataManager.Instance.HeishiPlayerNames[i]}, リーダー: {isLeader}, 上限解答: {WordDataManager.Instance.HeishiMaxAnswersPerPlayer}");
+                //Debug.Log($"平氏軍プレイヤー追加: {WordDataManager.Instance.HeishiPlayerNames[i]}, リーダー: {isLeader}, 上限解答: {WordDataManager.Instance.HeishiMaxAnswersPerPlayer}");
             }
-                        else // ★名前リストが不足している場合のログを追加★
+            else // ★名前リストが不足している場合のログを追加★
             {
-                Debug.LogWarning($"SetupPlayers: 平氏軍プレイヤー {i} の名前データがありません。HeishiPlayerNames.Count ({WordDataManager.Instance.HeishiPlayerNames.Count}) が不足しています。");
+                //Debug.LogWarning($"SetupPlayers: 平氏軍プレイヤー {i} の名前データがありません。HeishiPlayerNames.Count ({WordDataManager.Instance.HeishiPlayerNames.Count}) が不足しています。");
             }
         }
         Debug.Log("QuizPhaseManager: プレイヤー情報のセットアップ完了。");
-                // ★↓ここから追加↓★
+
+        // ★★★↓ここから全ての操作ボタンのリスナー設定コードを挿入します↓★★★
+
+        // --- 源氏軍の正解ボタン（○ボタン）のリスナー設定 ---
+        if (genjiPlayerCorrectButtons != null)
+        {
+            for (int i = 0; i < genjiPlayerCorrectButtons.Count; i++)
+            {
+                if (genjiPlayerCorrectButtons[i] != null && i < genjiPlayers.Count) // ボタンと対応プレイヤーが存在する場合のみ
+                {
+                    int playerIndex = i;
+                    genjiPlayerCorrectButtons[i].onClick.RemoveAllListeners();
+                    genjiPlayerCorrectButtons[i].onClick.AddListener(() => OnGenjiPlayerCorrect(playerIndex));
+                }
+            }
+        }
+
+        // --- 平氏軍の正解ボタン（○ボタン）のリスナー設定 ---
+        if (heishiPlayerCorrectButtons != null)
+        {
+            for (int i = 0; i < heishiPlayerCorrectButtons.Count; i++)
+            {
+                if (heishiPlayerCorrectButtons[i] != null && i < heishiPlayers.Count) // ボタンと対応プレイヤーが存在する場合のみ
+                {
+                    int playerIndex = i;
+                    heishiPlayerCorrectButtons[i].onClick.RemoveAllListeners();
+                    heishiPlayerCorrectButtons[i].onClick.AddListener(() => OnHeishiPlayerCorrect(playerIndex));
+                }
+            }
+        }
+
+        // --- 源氏軍の不正解ボタン（×ボタン）のリスナー設定 ---
+        if (genjiPlayerIncorrectButtons != null)
+        {
+            for (int i = 0; i < genjiPlayerIncorrectButtons.Count; i++)
+            {
+                if (genjiPlayerIncorrectButtons[i] != null && i < genjiPlayers.Count) // ボタンと対応プレイヤーが存在する場合のみ
+                {
+                    int playerIndex = i;
+                    genjiPlayerIncorrectButtons[i].onClick.RemoveAllListeners();
+                    genjiPlayerIncorrectButtons[i].onClick.AddListener(() => OnGenjiPlayerIncorrect(playerIndex));
+                }
+            }
+        }
+
+        // --- 平氏軍の不正解ボタン（×ボタン）のリスナー設定 ---
+        if (heishiPlayerIncorrectButtons != null)
+        {
+            for (int i = 0; i < heishiPlayerIncorrectButtons.Count; i++)
+            {
+                if (heishiPlayerIncorrectButtons[i] != null && i < heishiPlayers.Count) // ボタンと対応プレイヤーが存在する場合のみ
+                {
+                    int playerIndex = i;
+                    heishiPlayerIncorrectButtons[i].onClick.RemoveAllListeners();
+                    heishiPlayerIncorrectButtons[i].onClick.AddListener(() => OnHeishiPlayerIncorrect(playerIndex));
+                }
+            }
+        }
+        Debug.Log("QuizPhaseManager: 全プレイヤーの操作ボタンにリスナーを設定しました。"); // ★確認用ログ★
+
+        // ★↓ここから追加↓★
         Debug.Log($"★★ SetupPlayers完了時: genjiPlayers.Count = {genjiPlayers.Count} ★★");
-        for(int i = 0; i < genjiPlayers.Count; i++)
+        for (int i = 0; i < genjiPlayers.Count; i++)
         {
             Debug.Log($"源氏軍プレイヤー {i}: {genjiPlayers[i].PlayerName}, 解答権: {genjiPlayers[i].CanAnswer}, 上限: {genjiPlayers[i].MaxAnswersAllowed}");
         }
         Debug.Log($"★★ SetupPlayers完了時: heishiPlayers.Count = {heishiPlayers.Count} ★★");
-        for(int i = 0; i < heishiPlayers.Count; i++)
+        for (int i = 0; i < heishiPlayers.Count; i++)
         {
             Debug.Log($"平氏軍プレイヤー {i}: {heishiPlayers[i].PlayerName}, 解答権: {heishiPlayers[i].CanAnswer}, 上限: {heishiPlayers[i].MaxAnswersAllowed}");
         }
-
-
         // ★↓正解数表示を初期化する↓★
         UpdateAllPlayerCorrectCountDisplays();
         // ★↑ここまで↑★
+        UpdateTeamOtetsukiDisplay("A"); // 源氏軍のお手つき表示を更新（初期状態0回のはず）
+        UpdateTeamOtetsukiDisplay("B"); // 平氏軍のお手つき表示を更新（初期状態0回のはず）
+
+
     }
 
-    // ★↓各プレイヤーの「○ボタン」から呼び出されるお仕事（例として源氏1人目）↓★
-    // （将来的に、どのボタンが押されたかを引数で受け取る形にするのが良いでしょう）
-    public void OnGenjiPlayerCorrect(int playerIndex) 
+    public void OnGenjiPlayerCorrect(int playerIndex)
     {
-        Debug.Log($"★★ OnGenjiPlayerCorrect が呼び出されました！ playerIndex: {playerIndex} ★★"); 
-        
-        if (playerIndex >= 0 && playerIndex < genjiPlayers.Count) 
+        // --- 1. アクション実行前のチェック ---
+        if (areActionButtonsLocked)
         {
-            Debug.Log($"OnGenjiPlayerCorrect: playerIndex ({playerIndex}) は有効な範囲です。(genjiPlayers.Count: {genjiPlayers.Count})");
-            if (genjiPlayers[playerIndex].CanAnswer) 
-            {
-                Debug.Log($"OnGenjiPlayerCorrect: プレイヤー「{genjiPlayers[playerIndex].PlayerName}」は解答権があります。正解数を増やします。");
-                genjiPlayers[playerIndex].IncrementCorrectAnswers(); 
-                UpdatePlayerCorrectCountDisplay("A", playerIndex); 
-            }
-            else
-            {
-                Debug.LogWarning($"OnGenjiPlayerCorrect: プレイヤー「{genjiPlayers[playerIndex].PlayerName}」は現在解答できません (CanAnswer is false)。"); 
-            }
+            Debug.LogWarning("OnGenjiPlayerCorrect: アクションボタンがロック中のため、処理をスキップします。");
+            return;
         }
-        else // ★playerIndex が範囲外だった場合★
+        if (playerIndex < 0 || playerIndex >= genjiPlayers.Count)
         {
-            Debug.LogError($"★★ OnGenjiPlayerCorrect: playerIndex ({playerIndex}) が無効な範囲です！ genjiPlayers.Count は {genjiPlayers.Count} です。処理を中断します。 ★★"); 
+            Debug.LogError($"★★ OnGenjiPlayerCorrect: playerIndex ({playerIndex}) が無効な範囲です！ genjiPlayers.Count は {genjiPlayers.Count} です。処理を中断します。 ★★");
+            return;
         }
+        if (!genjiPlayers[playerIndex].CanAnswer)
+        {
+            Debug.LogWarning($"OnGenjiPlayerCorrect: プレイヤー「{genjiPlayers[playerIndex].PlayerName}」は現在解答できません（CanAnswer is false）。処理を中断します。");
+            return;
+        }
+
+        // --- 2. 状態保存とロック ---
+        // ★重要★ 状態を変更する「前」の値をUndo用に保存します
+        SaveStateForUndo(currentQuestionGenjiOtetsukiCount, currentQuestionHeishiOtetsukiCount, currentQuestionOkurifudaFromGenji, currentQuestionOkurifudaFromHeishi);
+
+        areActionButtonsLocked = true;
+        UpdateAllActionButtonsInteractableState(false);
+        Debug.LogWarning("OnGenjiPlayerCorrect: 正解アクションを受け付けたため、ボタンをロックしました。");
+
+        // --- 3. 正解処理のメインコルーチンを開始 ---
+        Debug.Log($"★★ OnGenjiPlayerCorrect が呼び出されました！ playerIndex: {playerIndex} ★★");
+        StartCoroutine(HandleCorrectAnswerSequence("A", playerIndex));
     }
 
     public void OnHeishiPlayerCorrect(int playerIndex)
     {
-        if (playerIndex >= 0 && playerIndex < heishiPlayers.Count)
+        // --- 1. アクション実行前のチェック ---
+        if (areActionButtonsLocked)
         {
-            if (heishiPlayers[playerIndex].CanAnswer)
+            Debug.LogWarning("OnHeishiPlayerCorrect: アクションボタンがロック中のため、処理をスキップします。");
+            return;
+        }
+        if (playerIndex < 0 || playerIndex >= heishiPlayers.Count)
+        {
+            Debug.LogError($"★★ OnHeishiPlayerCorrect: playerIndex ({playerIndex}) が無効な範囲です！ heishiPlayers.Count は {heishiPlayers.Count} です。処理を中断します。 ★★");
+            return;
+        }
+        if (!heishiPlayers[playerIndex].CanAnswer)
+        {
+            Debug.LogWarning($"OnHeishiPlayerCorrect: プレイヤー「{heishiPlayers[playerIndex].PlayerName}」は現在解答できません（CanAnswer is false）。処理を中断します。");
+            return;
+        }
+
+        // --- 2. 状態保存とロック ---
+        SaveStateForUndo(currentQuestionGenjiOtetsukiCount, currentQuestionHeishiOtetsukiCount, currentQuestionOkurifudaFromGenji, currentQuestionOkurifudaFromHeishi);
+
+        areActionButtonsLocked = true;
+        UpdateAllActionButtonsInteractableState(false);
+        Debug.LogWarning("OnHeishiPlayerCorrect: 正解アクションを受け付けたため、ボタンをロックしました。");
+
+        // --- 3. 正解処理のメインコルーチンを開始 ---
+        Debug.Log($"★★ OnHeishiPlayerCorrect が呼び出されました！ playerIndex: {playerIndex} ★★");
+        StartCoroutine(HandleCorrectAnswerSequence("B", playerIndex)); // ★チーム識別子を "B" (平氏) にして呼び出す★
+    }
+
+    void UpdateAllPlayerCorrectCountDisplays()
+    {
+        if (genjiPlayers != null)
+        {
+            for (int i = 0; i < genjiPlayers.Count; i++)
             {
-                heishiPlayers[playerIndex].IncrementCorrectAnswers();
-                UpdatePlayerCorrectCountDisplay("B", playerIndex);
-                // ProcessCorrectAnswer("B", playerIndex); // 仮の関数
+                // リストの範囲チェックをより安全にするために、genjiPlayerCorrectCountTexts[i] != null も追加すると良いかもしれません
+                if (genjiPlayerCorrectCountTexts != null &&
+                    i < genjiPlayerCorrectCountTexts.Count &&
+                    genjiPlayerCorrectCountTexts[i] != null) // nullチェック追加
+                {
+                    UpdatePlayerCorrectCountDisplay("A", i);
+                }
             }
         }
+        if (heishiPlayers != null)
+        {
+            for (int i = 0; i < heishiPlayers.Count; i++)
+            {
+                // こちらも同様に null チェックを追加するとより安全です
+                if (heishiPlayerCorrectCountTexts != null &&
+                    i < heishiPlayerCorrectCountTexts.Count &&
+                    heishiPlayerCorrectCountTexts[i] != null) // nullチェック追加
+                {
+                    UpdatePlayerCorrectCountDisplay("B", i);
+                }
+            }
+        }
+
+        Debug.Log("全プレイヤーの正解数表示を更新しました。(UpdateAllPlayerCorrectCountDisplays)");
+
     }
     // ★↓指定されたプレイヤーの正解数表示を更新するお仕事↓★
     void UpdatePlayerCorrectCountDisplay(string teamInitial, int playerIndex)
@@ -163,8 +475,14 @@ public class QuizPhaseManager : MonoBehaviour
                 genjiPlayerCorrectCountTexts[playerIndex] != null &&
                 playerIndex < genjiPlayers.Count && genjiPlayers[playerIndex] != null)
             {
-                genjiPlayerCorrectCountTexts[playerIndex].text = genjiPlayers[playerIndex].CorrectAnswers.ToString();
-
+                if (genjiPlayers[playerIndex].HasReachedMaxAnswers)
+                {
+                    genjiPlayerCorrectCountTexts[playerIndex].text = "完走";
+                }
+                else
+                {
+                    genjiPlayerCorrectCountTexts[playerIndex].text = genjiPlayers[playerIndex].CorrectAnswers.ToString();
+                }
             }
         }
         else if (teamInitial == "B") // 平氏軍
@@ -174,41 +492,1691 @@ public class QuizPhaseManager : MonoBehaviour
                 heishiPlayerCorrectCountTexts[playerIndex] != null &&
                 playerIndex < heishiPlayers.Count && heishiPlayers[playerIndex] != null)
             {
-                heishiPlayerCorrectCountTexts[playerIndex].text = heishiPlayers[playerIndex].CorrectAnswers.ToString();
-
+                if (heishiPlayers[playerIndex].HasReachedMaxAnswers)
+                {
+                    heishiPlayerCorrectCountTexts[playerIndex].text = "完走";
+                }
+                else
+                {
+                    heishiPlayerCorrectCountTexts[playerIndex].text = heishiPlayers[playerIndex].CorrectAnswers.ToString();
+                }
             }
         }
     }
-    // 全プレイヤーの正解数表示を更新するお仕事
-        
-        // 全プレイヤーの正解数表示を更新するお仕事
-    void UpdateAllPlayerCorrectCountDisplays()
+
+    private void UpdateAllActionButtonsInteractableState(bool shouldBeEnabledBasedOnGameFlow)
     {
+        Debug.Log($"[ボタンチェック] areActionButtonsLocked={areActionButtonsLocked} (問題: {currentQuestionIndex})");
+        Debug.Log($"[デバッグ] UpdateAllActionButtonsInteractableState({shouldBeEnabledBasedOnGameFlow}) を {System.Environment.StackTrace} で呼び出し");
+        Debug.Log($"UpdateAllActionButtonsInteractableState 呼び出し。ゲームフロー上の有効化指示: {shouldBeEnabledBasedOnGameFlow}");
+
+        // --- 源氏軍 正解ボタン ---
+        Debug.Log("[ボタン状態更新] 源氏軍の正解ボタンの処理を開始。");
+        for (int i = 0; i < genjiPlayerCorrectButtons.Count; i++)
+        {
+            if (genjiPlayerCorrectButtons[i] != null)
+            {
+                bool playerCanPress = true;
+                string debugHasReachedMax = "N/A";
+                string debugCanAnswer = "N/A";
+                if (i < genjiPlayers.Count && genjiPlayers[i] != null)
+                {
+                    if (genjiPlayers[i].HasReachedMaxAnswers || !genjiPlayers[i].CanAnswer)
+                    {
+                        playerCanPress = false;
+                    }
+                    debugHasReachedMax = genjiPlayers[i].HasReachedMaxAnswers.ToString();
+                    debugCanAnswer = genjiPlayers[i].CanAnswer.ToString();
+                }
+                else
+                {
+                    playerCanPress = false;
+                    Debug.LogWarning($"源氏正解ボタン[{i}]：対応するプレイヤーデータが見つかりません。");
+                }
+
+                bool finalInteractableState = shouldBeEnabledBasedOnGameFlow && playerCanPress;
+                genjiPlayerCorrectButtons[i].interactable = finalInteractableState;
+                Debug.Log($"源氏正解ボタン[{i}]: canPress={playerCanPress}, interactable={finalInteractableState}, HasReachedMax={debugHasReachedMax}, CanAnswer={debugCanAnswer}");
+            }
+        }
+
+        // --- 平氏軍 正解ボタン ---
+        Debug.Log("[ボタン状態更新] 平氏軍の正解ボタンの処理を開始。");
+        for (int i = 0; i < heishiPlayerCorrectButtons.Count; i++)
+        {
+            if (heishiPlayerCorrectButtons[i] != null)
+            {
+                bool playerCanPress = true;
+                string debugHasReachedMax = "N/A";
+                string debugCanAnswer = "N/A";
+                if (i < heishiPlayers.Count && heishiPlayers[i] != null)
+                {
+                    if (heishiPlayers[i].HasReachedMaxAnswers || !heishiPlayers[i].CanAnswer)
+                    {
+                        playerCanPress = false;
+                    }
+                    debugHasReachedMax = heishiPlayers[i].HasReachedMaxAnswers.ToString();
+                    debugCanAnswer = heishiPlayers[i].CanAnswer.ToString();
+                }
+                else
+                {
+                    playerCanPress = false;
+                    Debug.LogWarning($"平氏正解ボタン[{i}]：対応するプレイヤーデータが見つかりません。");
+                }
+
+                bool finalInteractableState = shouldBeEnabledBasedOnGameFlow && playerCanPress;
+                heishiPlayerCorrectButtons[i].interactable = finalInteractableState;
+                Debug.Log($"平氏正解ボタン[{i}]: canPress={playerCanPress}, interactable={finalInteractableState}, HasReachedMax={debugHasReachedMax}, CanAnswer={debugCanAnswer}");
+            }
+        }
+
+        // --- 源氏軍 不正解ボタン ---
+        for (int i = 0; i < genjiPlayerIncorrectButtons.Count; i++)
+        {
+            if (genjiPlayerIncorrectButtons[i] != null)
+            {
+                bool playerCanPress = true;
+                string debugHasReachedMax = "N/A";
+                string debugCanAnswer = "N/A";
+                if (i < genjiPlayers.Count && genjiPlayers[i] != null)
+                {
+                    if (genjiPlayers[i].HasReachedMaxAnswers || !genjiPlayers[i].CanAnswer)
+                    {
+                        playerCanPress = false;
+                    }
+                    debugHasReachedMax = genjiPlayers[i].HasReachedMaxAnswers.ToString();
+                    debugCanAnswer = genjiPlayers[i].CanAnswer.ToString();
+                }
+                else
+                {
+                    playerCanPress = false;
+                    Debug.LogWarning($"源氏不正解ボタン[{i}]：対応するプレイヤーデータが見つかりません。");
+                }
+
+                bool finalInteractableState = shouldBeEnabledBasedOnGameFlow && playerCanPress;
+                genjiPlayerIncorrectButtons[i].interactable = finalInteractableState;
+                Debug.Log($"源氏不正解ボタン[{i}]: canPress={playerCanPress}, interactable={finalInteractableState}, HasReachedMax={debugHasReachedMax}, CanAnswer={debugCanAnswer}");
+            }
+        }
+
+        // --- 平氏軍 不正解ボタン ---
+        for (int i = 0; i < heishiPlayerIncorrectButtons.Count; i++)
+        {
+            if (heishiPlayerIncorrectButtons[i] != null)
+            {
+                bool playerCanPress = true;
+                string debugHasReachedMax = "N/A";
+                string debugCanAnswer = "N/A";
+                if (i < heishiPlayers.Count && heishiPlayers[i] != null)
+                {
+                    if (heishiPlayers[i].HasReachedMaxAnswers || !heishiPlayers[i].CanAnswer)
+                    {
+                        playerCanPress = false;
+                    }
+                    debugHasReachedMax = heishiPlayers[i].HasReachedMaxAnswers.ToString();
+                    debugCanAnswer = heishiPlayers[i].CanAnswer.ToString();
+                }
+                else
+                {
+                    playerCanPress = false;
+                    Debug.LogWarning($"平氏不正解ボタン[{i}]：対応するプレイヤーデータが見つかりません。");
+                }
+
+                bool finalInteractableState = shouldBeEnabledBasedOnGameFlow && playerCanPress;
+                heishiPlayerIncorrectButtons[i].interactable = finalInteractableState;
+                Debug.Log($"平氏不正解ボタン[{i}]: canPress={playerCanPress}, interactable={finalInteractableState}, HasReachedMax={debugHasReachedMax}, CanAnswer={debugCanAnswer}");
+            }
+        }
+
+        // --- スルーボタン ---
+        if (passButton != null)
+        {
+            passButton.interactable = shouldBeEnabledBasedOnGameFlow;
+            Debug.Log($"[ボタン状態更新] スルーボタン ({passButton.gameObject.name}) を interactable = {shouldBeEnabledBasedOnGameFlow} に設定しました。");
+        }
+    }
+
+    private void LockPlayerButtons(string teamInitial, int playerIndex)
+    {
+        Debug.LogWarning($"プレイヤー ({teamInitial}軍 {playerIndex + 1}番目) が上限に達したため、ボタンを永続的にロックします。");
+
+        if (teamInitial == "A") // 源氏軍
+        {
+            // 正解ボタンのロック
+            if (playerIndex >= 0 && playerIndex < genjiPlayerCorrectButtons.Count && genjiPlayerCorrectButtons[playerIndex] != null)
+            {
+                genjiPlayerCorrectButtons[playerIndex].interactable = false;
+            }
+            // 不正解ボタンのロック
+            if (playerIndex >= 0 && playerIndex < genjiPlayerIncorrectButtons.Count && genjiPlayerIncorrectButtons[playerIndex] != null)
+            {
+                genjiPlayerIncorrectButtons[playerIndex].interactable = false;
+            }
+        }
+        else if (teamInitial == "B") // 平氏軍
+        {
+            // 正解ボタンのロック
+            if (playerIndex >= 0 && playerIndex < heishiPlayerCorrectButtons.Count && heishiPlayerCorrectButtons[playerIndex] != null)
+            {
+                heishiPlayerCorrectButtons[playerIndex].interactable = false;
+            }
+            // 不正解ボタンのロック
+            if (playerIndex >= 0 && playerIndex < heishiPlayerIncorrectButtons.Count && heishiPlayerIncorrectButtons[playerIndex] != null)
+            {
+                heishiPlayerIncorrectButtons[playerIndex].interactable = false;
+            }
+        }
+    }
+
+    public void LoadQuestion(int questionIndex)
+    {
+        if (WordDataManager.Instance == null || WordDataManager.Instance.MasterQuizDataList == null)
+        {
+            Debug.LogError("QuizPhaseManager: 問題データを読み込めません。WordDataManagerまたは問題リストが見つかりません。");
+            currentQuestionIndex = -1;
+            return;
+        }
+
+        if (questionIndex >= 0 && questionIndex < WordDataManager.Instance.MasterQuizDataList.Count)
+        {
+            currentQuestionIndex = questionIndex;
+            currentQuestionData = WordDataManager.Instance.MasterQuizDataList[currentQuestionIndex];
+            // ★↓ここからログ出力を変更・追加します↓★
+            Debug.LogError("--- LoadQuestion: ★★★ログ出力テスト開始★★★ ---"); // 目立つようにLogErrorに
+
+            Debug.Log($"問題 {currentQuestionData.QuestionNumber} ({currentQuestionIndex + 1}問目) をロードしました。");
+            Debug.Log($"  問題文: 「{currentQuestionData.QuestionText}」");
+            Debug.Log($"  答えのワード: 「{currentQuestionData.AnswerWord}」");
+
+
+
+            currentQuestionGenjiOtetsukiCount = 0;
+            currentQuestionHeishiOtetsukiCount = 0;
+            UpdateOtetsukiStatusDisplay(); // ★このように1回の呼び出しに変更★
+            Debug.Log("[お手つき表示リセット] 新しい問題のため、両チームの「送り札」表示を0枚にリセットしました。");
+
+            currentQuestionOkurifudaFromGenji = 0;  // 源氏からの送り札カウントをリセット
+            currentQuestionOkurifudaFromHeishi = 0; // 平氏からの送り札カウントをリセット
+            Debug.Log("[送り札カウントリセット] 新しい問題のため、「相手札獲得による送り札」のカウントを両チーム0にリセットしました。");
+            // ↑↑↑ ここまで追加 ↑↑↑
+
+            // ★↓ここから全プレイヤーの解答権リセット処理を追加↓★
+            // 源氏軍プレイヤーの解答権をリセット
+            if (genjiPlayers != null)
+            {
+                foreach (QuizPlayer player in genjiPlayers)
+                {
+                    if (player != null)
+                    {
+                        // 完走済みのプレイヤー以外は、解答権を true に戻す
+                        player.CanAnswer = !player.HasReachedMaxAnswers;
+                    }
+                }
+            }
+            // 平氏軍プレイヤーの解答権をリセット
+            if (heishiPlayers != null)
+            {
+                foreach (QuizPlayer player in heishiPlayers)
+                {
+                    if (player != null)
+                    {
+                        player.CanAnswer = !player.HasReachedMaxAnswers;
+                    }
+                }
+            }
+            Debug.Log("[進行制御] 全プレイヤーの解答権をリセットしました（完走者を除く）。");
+            // ★↑ここまで追加↑★
+
+            Debug.LogError("--- LoadQuestion: ★★★ログ出力テスト終了★★★ ---"); // 目立つようにLogErrorに
+
+        }
+        else
+        {
+            Debug.LogError($"QuizPhaseManager: 指定された問題インデックス ({questionIndex}) は無効です。問題数: {WordDataManager.Instance.MasterQuizDataList.Count}");
+            currentQuestionIndex = -1;
+            // TODO: 全ての問題が終了したなどの処理が必要ならここ
+        }
+
+        if (questionIndex == 0)
+        {
+            currentPhase = QuizGamePhase.Answering;
+            Debug.Log("[フェーズ遷移] 現在のフェーズを『解答フェーズ』に設定しました（1問目の読み込み時）");
+        }
+        else
+        {
+            currentPhase = QuizGamePhase.AnswerReady;
+            Debug.Log("[フェーズ遷移] 現在のフェーズを『AnswerReady』に設定しました（2問目以降）");
+        }
+
+        // すべての問題ロード処理（LoadQuestion）の最後に、下記2行を追記！
+    }
+
+    public void OnPassQuestionButtonClicked()
+    {
+        Debug.Log("[スルーボタン処理] OnPassQuestionButtonClicked: 関数が開始されました。");
+
+        if (areActionButtonsLocked)
+        {
+            Debug.LogWarning("[スルーボタン処理] 既にアクションボタンがロックされているため、処理をスキップします。");
+            return;
+        }
+
+        // --- 状態保存とロック ---
+        SaveStateForUndo(currentQuestionGenjiOtetsukiCount, currentQuestionHeishiOtetsukiCount, currentQuestionOkurifudaFromGenji, currentQuestionOkurifudaFromHeishi);
+        areActionButtonsLocked = true;
+        UpdateAllActionButtonsInteractableState(false);
+        Debug.LogWarning("【スルーボタンが押されました】");
+
+        // --- 正解札の情報を特定 ---
+        if (currentQuestionIndex == -1 || string.IsNullOrEmpty(currentQuestionData.AnswerWord))
+        {
+            Debug.LogError("OnPassQuestionButtonClicked: 現在の問題データまたは答えのワードが不明です。処理をスキップします。");
+            // エラーなので、ボタンロックを解除して操作可能に戻す
+            areActionButtonsLocked = false;
+            UpdateAllActionButtonsInteractableState(true);
+            return;
+        }
+        string answerWord = currentQuestionData.AnswerWord;
+        FoundCardInfo cardInfo = FindMatchingCardLocation(answerWord);
+
+        // --- スルー時の札のデータ処理（空札が消える場合など、もしあれば） ---
+        // 現在のコードでは、スルー時に空札も場に残るルールでしたので、ここではデータ操作は行いません。
+        // もしスルー時に空札を消すルールに戻す場合は、ここにその処理を入れ、画面更新も行います。
+        // if (cardInfo.Location == CardLocationType.Empty) { ... }
+
+        // --- 問題表示の演出を開始 ---
+        //ShowQuestionWithAnimation(cardInfo, false); // isCorrectAnswer は false で呼び出し
+
+        // --- お手つきペナルティの計算と、送り札選択モードへの移行 ---
+        ProcessAndExecuteOtetsukiPenalties();
+
+        // --- 処理完了後の状態更新 ---
+        //currentPhase = QuizGamePhase.OkurifudaCompleted; // 問題解決済みフェーズに更新
+        //Debug.LogWarning($"[フェーズ更新] スルー処理が完了したため、フェーズを {currentPhase} に設定しました。");
+
+        if (nextQuestionButton != null)
+        {
+            nextQuestionButton.interactable = true;
+            Debug.Log("[進行制御] 「次の問題」ボタンのロックを解除しました。（スルー時）");
+        }
+    }
+
+
+    public void OnNextQuestionButtonClicked()
+    {
+        // ★★★↓この1行のログを追加してください↓★★★
+        Debug.LogError("【フェーズ確認】「次の問題へ」ボタンが押された瞬間のフェーズ: " + currentPhase);
+        // ★★★↑ここまで↑★★★
+
+        Debug.LogWarning("【次の問題へボタンが押されました】フェーズ: " + currentPhase);
+
+        if (nextQuestionButton != null)
+        {
+            nextQuestionButton.interactable = false; // 連打防止
+            StartCoroutine(EnableButtonAfterDelay(2f)); // 2秒後に解除
+            Debug.LogWarning("【次の問題へボタンが押されました】ボタンを無効化しました");
+        }
+
+        // 送り札フェーズが終わった直後 or 送り札不要の場合
+        if (currentPhase == QuizGamePhase.OkurifudaSelection || currentPhase == QuizGamePhase.OkurifudaCompleted)
+        {
+            // ★ここでインデックスを進める！★
+            currentQuestionIndex++;
+            LoadQuestion(currentQuestionIndex);
+
+            currentPhase = QuizGamePhase.AnswerReady;
+            Debug.Log("[進行] フェーズをAnswerReadyに設定。次の問題をロードしました。");
+            if (nextQuestionButton != null) nextQuestionButton.interactable = true; // もう一回だけ押せるようにする
+            return;
+        }
+
+        // 解答開始前なら解答フェーズへ
+        if (currentPhase == QuizGamePhase.AnswerReady)
+        {
+            currentPhase = QuizGamePhase.Answering;
+            Debug.Log("[進行] フェーズをAnsweringに設定。解答フェーズ開始。");
+            SetAllPlayerAnswerButtonsInteractable(true);
+
+            if (nextQuestionButton != null) nextQuestionButton.interactable = false;
+            return;
+        }
+    }
+
+    private IEnumerator EnableButtonAfterDelay(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        if (nextQuestionButton != null)
+        {
+            nextQuestionButton.interactable = true;
+        }
+    }
+    // 全てのプレイヤーの○×ボタンを有効/無効にする
+    private void SetAllPlayerAnswerButtonsInteractable(bool interactable)
+    {
+        if (genjiPlayerCorrectButtons != null)
+        {
+            foreach (var btn in genjiPlayerCorrectButtons)
+            {
+                if (btn != null) btn.interactable = interactable;
+            }
+        }
+        if (heishiPlayerCorrectButtons != null)
+        {
+            foreach (var btn in heishiPlayerCorrectButtons)
+            {
+                if (btn != null) btn.interactable = interactable;
+            }
+        }
+        if (genjiPlayerIncorrectButtons != null)
+        {
+            foreach (var btn in genjiPlayerIncorrectButtons)
+            {
+                if (btn != null) btn.interactable = interactable;
+            }
+        }
+        if (heishiPlayerIncorrectButtons != null)
+        {
+            foreach (var btn in heishiPlayerIncorrectButtons)
+            {
+                if (btn != null) btn.interactable = interactable;
+            }
+        }
+    }
+
+
+
+    private void SaveStateForUndo(int genjiOtetsukiBeforeAction, int heishiOtetsukiBeforeAction, int okurifudaFromGenjiBeforeAction, int okurifudaFromHeishiBeforeAction)
+    {
+        {
+            Debug.LogWarning("[Undo保存] SaveStateForUndo() が呼ばれました。");
+        }
+
+        if (WordDataManager.Instance == null) return;
+
+        // ★★★↓直前の問題インデックスを保存する処理を追加↓★★★
+        lastCurrentQuestionIndexForUndo = currentQuestionIndex;
+        Debug.Log($"[Undo保存] 直前の問題インデックスを保存しました: {lastCurrentQuestionIndexForUndo}");
+        // ★★★↑ここまで追加↑★★★
+
+        // 札の状態を保存 (これは既存のコード)
+        lastGenjiCardsState = new List<SelectableWordEntry>(WordDataManager.Instance.GenjiSelectedCards);
+        lastHeishiCardsState = new List<SelectableWordEntry>(WordDataManager.Instance.HeishiSelectedCards);
+        lastEmptyCardsState = new List<SelectableWordEntry>(WordDataManager.Instance.EmptyCardsList);
+
+        // ★↓ここから全プレイヤーの状態をスナップショットとして保存する処理を追加します↓★
+        // 源氏軍プレイヤーの状態保存
         if (genjiPlayers != null)
         {
-            for (int i = 0; i < genjiPlayers.Count; i++)
+            lastGenjiPlayersSnapshot = new List<PlayerStateSnapshot>();
+            foreach (QuizPlayer player in genjiPlayers)
             {
-                if (genjiPlayerCorrectCountTexts != null && i < genjiPlayerCorrectCountTexts.Count)
-                {
-                    // ★↓ここが正しいか確認↓★
-                    UpdatePlayerCorrectCountDisplay("A", i); 
-                }
+                lastGenjiPlayersSnapshot.Add(new PlayerStateSnapshot(player));
             }
         }
+        else
+        {
+            lastGenjiPlayersSnapshot = null; // もしリストがnullならスナップショットもnullに
+        }
+
+        // 平氏軍プレイヤーの状態保存
         if (heishiPlayers != null)
         {
-            for (int i = 0; i < heishiPlayers.Count; i++)
+            lastHeishiPlayersSnapshot = new List<PlayerStateSnapshot>();
+            foreach (QuizPlayer player in heishiPlayers)
             {
-                if (heishiPlayerCorrectCountTexts != null && i < heishiPlayerCorrectCountTexts.Count)
-                {
-                    // ★↓ここが正しいか確認↓★
-                    UpdatePlayerCorrectCountDisplay("B", i);
-                }
+                lastHeishiPlayersSnapshot.Add(new PlayerStateSnapshot(player));
             }
         }
-        Debug.Log("全プレイヤーの正解数表示を更新しました。(UpdateAllPlayerCorrectCountDisplays)");
+        else
+        {
+            lastHeishiPlayersSnapshot = null;
+        }
+        // ★★★↓ここでお手つき関連カウントを引数から保存するように変更↓★★★
+        lastCurrentQuestionGenjiOtetsukiCount = genjiOtetsukiBeforeAction;
+        lastCurrentQuestionHeishiOtetsukiCount = heishiOtetsukiBeforeAction;
+        lastCurrentQuestionOkurifudaFromGenji = okurifudaFromGenjiBeforeAction;
+        lastCurrentQuestionOkurifudaFromHeishi = okurifudaFromHeishiBeforeAction;
+        Debug.Log($"[Undo保存] 行動前のお手つき関連カウントを保存しました。源お手つき:{lastCurrentQuestionGenjiOtetsukiCount}, 平お手つき:{lastCurrentQuestionHeishiOtetsukiCount}, 源→平送り義務:{lastCurrentQuestionOkurifudaFromGenji}, 平→源送り義務:{lastCurrentQuestionOkurifudaFromHeishi}");
+        // ★★★↑ここまで変更↑★★★
+
+        // ★★★↓ここから送り札選択モードの情報を保存する処理を追加↓★★★
+        wasLastActionOkurifudaSelectionMode = isOkurifudaSelectionMode; // 現在の送り札選択モードの状態を保存
+        if (isOkurifudaSelectionMode) // もし現在が送り札選択モードなら、関連情報も保存
+        {
+            lastOkurifudaSendingTeamInitial = currentOkurifudaSendingTeamInitial;
+            lastOkurifudaSendingTeamName = currentOkurifudaSendingTeamName;
+            lastOkurifudaReceivingTeamName = currentOkurifudaReceivingTeamName;
+            lastNumberOfCardsToSelectForOkurifuda = numberOfCardsToSelectForOkurifuda;
+            lastRemainingCardsToSelectForOkurifuda = remainingCardsToSelectForOkurifuda;
+            // selectedOkurifudaCandidates と lastClickedOkurifudaCandidate はUndo時にクリアするので保存不要
+            Debug.Log($"[Undo保存] 送り札選択モードの情報を保存しました。SendingTeam: {lastOkurifudaSendingTeamName}, NumToSelect: {lastNumberOfCardsToSelectForOkurifuda}, Remaining: {lastRemainingCardsToSelectForOkurifuda}");
+        }
+        else
+        {
+            // 送り札選択モードでなければ、関連情報は初期値のままでOK（あるいはクリアしても良い）
+            lastOkurifudaSendingTeamInitial = "";
+            lastOkurifudaSendingTeamName = "";
+            lastOkurifudaReceivingTeamName = "";
+            lastNumberOfCardsToSelectForOkurifuda = 0;
+            lastRemainingCardsToSelectForOkurifuda = 0;
+            Debug.Log("[Undo保存] 現在は送り札選択モードではないため、関連情報は初期化して保存します。");
+        }
+        // ★★★↑ここまで追加↑★★★
+
+        canPerformUndo = true;
+        Debug.Log("現在の状態（札と全プレイヤー）をUndo用に保存しました。"); // ログも少し変更
+    }
+
+    public void OnReturnToSetupScreenButtonClicked()
+    {
+        Debug.LogWarning("[画面遷移] 「準備画面に戻る」ボタンが押されました。準備画面へ遷移します...");
+
+        // ★★★↓ここからシーン遷移処理を追加↓★★★
+        // "PlayerSetupScene" の部分は、にぃぬさんの実際の準備画面のシーン名に置き換えてください。
+        // このシーン名は、Unityエディタのプロジェクトウィンドウで確認できます。
+        // また、このシーンがビルド設定に追加されている必要があります。
+        SceneManager.LoadScene("Genpei_Gassen");
+        // ★★★↑ここまでシーン遷移処理を追加↑★★★
+    }
+    public void OnUndoButtonClicked()
+    {
+        Debug.LogWarning("✅ Undoボタンが押されました！");
+
+        if (!canPerformUndo)
+        {
+            Debug.LogWarning("Undoできる操作がありません。");
+            return;
+        }
+
+        if (isUndoButtonLocked) return; // 連打防止
+        isUndoButtonLocked = true;      // 押されたのでロック
+
+
+        Debug.LogWarning("【Undo実行】直前の状態に戻します...");
+
+        if (WordDataManager.Instance == null)
+        {
+            Debug.LogError("Undo失敗: WordDataManagerが見つかりません。");
+            canPerformUndo = false;
+            return;
+        }
+
+        switch (currentPhase)
+        {
+            // ----------------- 解答フェーズ -----------------
+            case QuizGamePhase.Answering:
+                Debug.LogWarning("【Undo実行】現在は『解答フェーズ』です。誤答カウントと解答権を戻します。");
+
+                if (lastIncorrectTeamInitial == "A" && lastIncorrectPlayerIndex >= 0 && lastIncorrectPlayerIndex < genjiPlayers.Count)
+                {
+                    genjiPlayers[lastIncorrectPlayerIndex].CanAnswer = true;
+                    Debug.LogWarning($"[Undo復元] 源氏軍「{genjiPlayers[lastIncorrectPlayerIndex].PlayerName}」の解答権を復元。");
+                }
+                else if (lastIncorrectTeamInitial == "B" && lastIncorrectPlayerIndex >= 0 && lastIncorrectPlayerIndex < heishiPlayers.Count)
+                {
+                    heishiPlayers[lastIncorrectPlayerIndex].CanAnswer = true;
+                    Debug.LogWarning($"[Undo復元] 平氏軍「{heishiPlayers[lastIncorrectPlayerIndex].PlayerName}」の解答権を復元。");
+                }
+
+                currentQuestionGenjiOtetsukiCount = lastCurrentQuestionGenjiOtetsukiCount;
+                currentQuestionHeishiOtetsukiCount = lastCurrentQuestionHeishiOtetsukiCount;
+                currentQuestionOkurifudaFromGenji = lastCurrentQuestionOkurifudaFromGenji;
+                currentQuestionOkurifudaFromHeishi = lastCurrentQuestionOkurifudaFromHeishi;
+
+                UpdateOtetsukiStatusDisplay();
+                UpdateAllActionButtonsInteractableState(true);
+                canPerformUndo = false;
+                return;
+
+            // ----------------- 送り札選択フェーズ -----------------
+            case QuizGamePhase.OkurifudaSelection:
+                Debug.LogWarning("【Undo実行】『送り札選択フェーズ』の札選択状態をリセット。");
+
+                remainingCardsToSelectForOkurifuda = lastRemainingCardsToSelectForOkurifuda;
+                numberOfCardsToSelectForOkurifuda = lastNumberOfCardsToSelectForOkurifuda;
+                currentOkurifudaSendingTeamInitial = lastOkurifudaSendingTeamInitial;
+                currentOkurifudaSendingTeamName = lastOkurifudaSendingTeamName;
+                currentOkurifudaReceivingTeamName = lastOkurifudaReceivingTeamName;
+
+                foreach (var cardUI in selectedOkurifudaCandidates)
+                {
+                    if (cardUI != null) cardUI.SetSelectedForOkurifuda(false);
+                }
+                selectedOkurifudaCandidates.Clear();
+                lastClickedOkurifudaCandidate = null;
+
+                UpdateOtetsukiStatusDisplay();
+                playableCanvasManagerInstance?.RefreshAllCardDisplays();
+
+                canPerformUndo = false;
+                return;
+
+            // ----------------- 送り札完了後 -----------------
+            case QuizGamePhase.OkurifudaCompleted:
+                Debug.LogWarning("【Undo実行】『送り札完了後』の状態を復元中...");
+
+                WordDataManager.Instance.RestoreAllCardStates(lastGenjiCardsState, lastHeishiCardsState, lastEmptyCardsState);
+
+                RestoreAllPlayerStates();
+                RestoreCounters();
+                RefreshAllUI();
+
+                currentPhase = QuizGamePhase.OkurifudaSelection;
+                Debug.LogWarning("[Undo完了] 状態を『送り札選択フェーズ』に戻しました。");
+                canPerformUndo = false;
+                return;
+
+            // ----------------- 解答準備フェーズ（次の問題ボタンを押した直後） -----------------
+            case QuizGamePhase.AnswerReady:
+                Debug.LogWarning("[Undo] 『次の問題ボタン直後』の状態へ復元。");
+
+                if (lastCurrentQuestionIndexForUndo != -1)
+                {
+                    currentQuestionIndex = lastCurrentQuestionIndexForUndo;
+                    LoadQuestion(currentQuestionIndex);
+                }
+                else
+                {
+                    Debug.LogError("[Undo失敗] 問題インデックスが保存されていません。");
+                }
+
+                WordDataManager.Instance.RestoreAllCardStates(lastGenjiCardsState, lastHeishiCardsState, lastEmptyCardsState);
+                RestoreAllPlayerStates();
+                RestoreCounters();
+                RefreshAllUI();
+
+                currentPhase = QuizGamePhase.OkurifudaSelection;
+                Debug.LogWarning("[Undo完了] 状態を『送り札選択フェーズ』に復元しました。");
+                //canPerformUndo = false;
+                //undoButton.interactable = false;
+                return;
+        }
+        Invoke(nameof(UnlockUndoButton), 1.0f);
+    }
+
+    private void UpdateTeamOtetsukiDisplay(string teamInitial)
+    {
+        if (teamInitial == "A") // 源氏軍の場合
+        {
+            if (genjiOtetsukiDisplayText != null) // 表示用UI部品が設定されていれば
+            {
+                genjiOtetsukiDisplayText.text = $"送り札{currentQuestionGenjiOtetsukiCount}枚";
+            }
+        }
+        else if (teamInitial == "B") // 平氏軍の場合
+        {
+            if (heishiOtetsukiDisplayText != null) // 表示用UI部品が設定されていれば
+            {
+                heishiOtetsukiDisplayText.text = $"送り札{currentQuestionHeishiOtetsukiCount}枚";
+            }
+        }
+    }
+    private void UnlockUndoButton()
+    {
+        isUndoButtonLocked = false;
+    }
+
+    public void OnGenjiPlayerIncorrect(int playerIndex)
+    {
+        // プレイヤーインデックスの有効性チェックとプレイヤーオブジェクト取得
+        if (playerIndex < 0 || playerIndex >= genjiPlayers.Count || genjiPlayers[playerIndex] == null)
+        {
+            Debug.LogWarning($"源氏軍のプレイヤー (インデックス:{playerIndex}) がお手つきしましたが、プレイヤー情報が無効です。処理を中断します。");
+            return;
+        }
+
+        QuizPlayer player = genjiPlayers[playerIndex];
+
+        // 既にもう解答できない状態なら、何もしない（重複処理防止）
+        if (!player.CanAnswer)
+        {
+            Debug.LogWarning($"源氏軍のプレイヤー「{player.PlayerName}」は既にお手つき済みか完走済みのため、これ以上操作できません。");
+            return;
+        }
+        // ★★★↓行動前のカウントを一時的に保持↓★★★
+        int genjiOtetsukiBefore = currentQuestionGenjiOtetsukiCount;
+        int heishiOtetsukiBefore = currentQuestionHeishiOtetsukiCount;
+        int okurifudaGenjiBefore = currentQuestionOkurifudaFromGenji;
+        int okurifudaHeishiBefore = currentQuestionOkurifudaFromHeishi;
+        // (この時点では、PlayerStateSnapshot に必要な CanAnswer も true のはず)
+
+        // ★★★SaveStateForUndo を、状態変更の「前」に移動★★★
+        SaveStateForUndo(genjiOtetsukiBefore, heishiOtetsukiBefore, okurifudaGenjiBefore, okurifudaHeishiBefore);
+
+
+        // 1. お手つきカウントを増やす (これは既存の処理ですね)
+        currentQuestionGenjiOtetsukiCount++;
+        UpdateOtetsukiStatusDisplay(); // ★このように変更★
+
+
+        // 2. ★新しい処理★: このプレイヤーの解答権を「なし」にする (この問題のみ)
+        player.CanAnswer = false;
+        Debug.Log($"源氏軍のプレイヤー「{player.PlayerName}」がお手つきしたため、この問題での解答権を失いました。");
+
+        // 3. ★新しい処理★: ボタンの表示状態を全体的に更新する
+        //    (このプレイヤーのボタンだけが非表示/操作不可になるはずです)
+        UpdateAllActionButtonsInteractableState(true); // true を渡すのは、他のプレイヤーはまだ操作可能だから
+
+        // 4. ログ出力 (これは既存の処理ですね)
+        Debug.Log($"源氏軍のプレイヤー「{player.PlayerName}」(インデックス:{playerIndex}) がお手つきしました。現在の源氏軍お手つき回数: {currentQuestionGenjiOtetsukiCount}");
+
+        lastIncorrectPlayerIndex = playerIndex;
+        lastIncorrectTeamInitial = "A";
+
+        //canPerformUndo = true;
+        //undoButton.interactable = true;
+        //Debug.LogWarning("[お手つき後] Undo再有効化されました。");
+
+    }
+    public void OnHeishiPlayerIncorrect(int playerIndex)
+    {
+        if (playerIndex < 0 || playerIndex >= heishiPlayers.Count || heishiPlayers[playerIndex] == null)
+        {
+            Debug.LogWarning($"[お手つき処理中止] インデックス異常: {playerIndex}");
+            return;
+        }
+
+        QuizPlayer player = heishiPlayers[playerIndex];
+
+        Debug.LogWarning($"[お手つき処理確認] プレイヤー {player.PlayerName} / CanAnswer = {player.CanAnswer}");
+
+        if (!player.CanAnswer)
+        {
+            Debug.LogWarning($"[お手つき処理中止] プレイヤー {player.PlayerName} は CanAnswer=false のためスキップ");
+            return;
+        }
+
+        Debug.LogWarning($"[お手つき処理継続] SaveStateForUndoを呼び出します");
+
+        // ↓ここから元の処理を続けます
+        int genjiOtetsukiBefore = currentQuestionGenjiOtetsukiCount;
+        int heishiOtetsukiBefore = currentQuestionHeishiOtetsukiCount;
+        int okurifudaGenjiBefore = currentQuestionOkurifudaFromGenji;
+        int okurifudaHeishiBefore = currentQuestionOkurifudaFromHeishi;
+
+        SaveStateForUndo(genjiOtetsukiBefore, heishiOtetsukiBefore, okurifudaGenjiBefore, okurifudaHeishiBefore);
+
+        currentQuestionHeishiOtetsukiCount++;
+        UpdateOtetsukiStatusDisplay();
+
+        player.CanAnswer = false;
+        Debug.Log($"平氏軍のプレイヤー「{player.PlayerName}」がお手つきしたため、この問題での解答権を失いました。");
+
+        UpdateAllActionButtonsInteractableState(true);
+
+        Debug.Log($"平氏軍のプレイヤー「{player.PlayerName}」(インデックス:{playerIndex}) がお手つきしました。現在の平氏軍お手つき回数: {currentQuestionHeishiOtetsukiCount}");
+
+        lastIncorrectPlayerIndex = playerIndex;
+        lastIncorrectTeamInitial = "B";
+
+        //canPerformUndo = true;
+        //undoButton.interactable = true;
+        //Debug.LogWarning("[お手つき後] Undo再有効化されました。");
+    }
+
+    private void ProcessAndExecuteOtetsukiPenalties()
+    {
+        Debug.Log($"[最終札移動計算開始] 現在の問題のお手つき状況：");
+        Debug.Log($"  ×ボタンによるお手つき：源氏 {currentQuestionGenjiOtetsukiCount}回, 平氏 {currentQuestionHeishiOtetsukiCount}回");
+        Debug.Log($"  相手札獲得による送り札義務：源氏から平氏へ {currentQuestionOkurifudaFromGenji}枚, 平氏から源氏へ {currentQuestionOkurifudaFromHeishi}枚");
+
+        // まず、各チームが「送るべき」札の総数を計算
+        int totalCardsToSendFromGenji = currentQuestionOkurifudaFromGenji; // 相手札獲得によるもの
+        int totalCardsToSendFromHeishi = currentQuestionOkurifudaFromHeishi; // 相手札獲得によるもの
+
+        // 次に、×ボタンによるお手つきの差を加味
+        if (currentQuestionHeishiOtetsukiCount > currentQuestionGenjiOtetsukiCount)
+        {
+            // 平氏のお手つきが多い => 源氏から平氏へ追加で送る
+            totalCardsToSendFromGenji += (currentQuestionHeishiOtetsukiCount - currentQuestionGenjiOtetsukiCount);
+        }
+        else if (currentQuestionGenjiOtetsukiCount > currentQuestionHeishiOtetsukiCount)
+        {
+            // 源氏のお手つきが多い => 平氏から源氏へ追加で送る
+            totalCardsToSendFromHeishi += (currentQuestionGenjiOtetsukiCount - currentQuestionHeishiOtetsukiCount);
+        }
+
+        Debug.Log($"[最終札移動計算] 計算上の総送り枚数：源氏から平氏へ {totalCardsToSendFromGenji}枚, 平氏から源氏へ {totalCardsToSendFromHeishi}枚");
+
+        // 相殺処理
+        string finalSendingTeamName = "";
+        string finalReceivingTeamName = "";
+        int finalNumberOfCards = 0;
+
+        if (totalCardsToSendFromGenji > totalCardsToSendFromHeishi)
+        {
+            // 源氏から平氏への純粋な送り枚数
+            finalSendingTeamName = "源氏";
+            finalReceivingTeamName = "平氏";
+            finalNumberOfCards = totalCardsToSendFromGenji - totalCardsToSendFromHeishi;
+        }
+        else if (totalCardsToSendFromHeishi > totalCardsToSendFromGenji)
+        {
+            // 平氏から源氏への純粋な送り枚数
+            finalSendingTeamName = "平氏";
+            finalReceivingTeamName = "源氏";
+            finalNumberOfCards = totalCardsToSendFromHeishi - totalCardsToSendFromGenji;
+        }
+        // else finalNumberOfCards は 0 のまま (相殺して0枚、または元々0枚)
+        if (finalNumberOfCards > 0)
+        {
+            // ★★★↓ここからメッセージ表示処理を追加↓★★★
+            string message = $"{finalSendingTeamName}軍から{finalReceivingTeamName}軍へ{finalNumberOfCards}枚の送り札";
+            float messageDisplayDuration = 8.0f; // メッセージの表示時間（秒）
+
+            StartCoroutine(ShowFinalOkurifudaMessage(message, messageDisplayDuration));
+            Debug.Log($"[最終札移動予告] メッセージ「{message}」を表示します。");
+            // ★★★↑ここまでメッセージ表示処理を追加↑★★★
+
+            // メッセージ表示の後（実際にはコルーチンなので並行処理に近いですが）、送り札選択モードを開始
+            Debug.Log($"[最終札移動決定] ★★ {finalSendingTeamName}軍から{finalReceivingTeamName}軍へ、合計 {finalNumberOfCards}枚 の送り札選択を開始します。 ★★"); // ログメッセージ変更
+            AttemptSendOtetsukiCards(finalSendingTeamName, finalReceivingTeamName, finalNumberOfCards);
+        }
+        else // finalNumberOfCardsが0以下の場合
+        {
+            Debug.Log("[最終札移動決定] 送り札は発生しませんでした（相殺されたか、元々ゼロ）。");
+            // ★★★↓ここに追加します↓★★★
+            currentPhase = QuizGamePhase.OkurifudaCompleted; // 送り札がないので、ここで「完了」にする
+            Debug.LogWarning($"[フェーズ更新] 送り札不要のため、フェーズを {currentPhase} に設定しました。");
+            // ★★★↑ここまで追加↑★★★
+            // 送り札がない場合のメッセージも出す
+            StartCoroutine(ShowFinalOkurifudaMessage("送り札はありません", 8.0f));
+        }
+
+
+    }
+    private void AttemptSendOtetsukiCards(string sendingTeamName, string receivingTeamName, int numberOfCards)
+    {
+        if (numberOfCards <= 0)
+        {
+            Debug.Log($"[送り札処理] {sendingTeamName}から{receivingTeamName}へ送る指示枚数が{numberOfCards}枚のため、送り札選択モードは開始しません。");
+            // 必要ならここで「送り札なし」のメッセージを ShowFinalOkurifudaMessage で表示。
+            // (例: StartCoroutine(ShowFinalOkurifudaMessage($"{sendingTeamName}軍から{receivingTeamName}軍への送り札はありませんでした。", 3.0f));)
+            // ただし、このメッセージは ProcessAndExecuteOtetsukiPenalties の最後で出す方が適切かもしれません。
+            return;
+        }
+
+        if (WordDataManager.Instance == null)
+        {
+            Debug.LogError("[お手つき札送り] WordDataManager のインスタンスが見つかりません！処理を中断します。");
+            return;
+        }
+
+        Debug.Log($"[送り札選択モード] ★★ {sendingTeamName}軍から{receivingTeamName}軍へ、{numberOfCards}枚の送り札選択を開始します。 ★★");
+
+        isOkurifudaSelectionMode = true;
+
+        // ★★★↓ここに追加します↓★★★
+        currentPhase = QuizGamePhase.OkurifudaSelection; // フェーズを「送り札選択中」に設定！
+        Debug.LogWarning($"[フェーズ更新] 送り札選択のため、フェーズを {currentPhase} に設定しました。");
+        // ★★★↑ここまで↑★★★
+
+        currentOkurifudaSendingTeamName = sendingTeamName;
+        currentOkurifudaReceivingTeamName = receivingTeamName;
+        currentOkurifudaSendingTeamInitial = (sendingTeamName == "源氏") ? "A" : "B";
+        numberOfCardsToSelectForOkurifuda = numberOfCards;
+        remainingCardsToSelectForOkurifuda = numberOfCards;
+        selectedOkurifudaCandidates.Clear();
+
+        if (nextQuestionButton != null)
+        {
+            nextQuestionButton.interactable = false;
+            Debug.Log("[送り札選択モード] 「次の問題へ」ボタンをロックしました。");
+        }
+
+        // 送り札指示UIを更新 (チーム別のお手つき表示UIを流用)
+        if (currentOkurifudaSendingTeamInitial == "A")
+        {
+            if (genjiOtetsukiDisplayText != null) genjiOtetsukiDisplayText.text = $"送り札{remainingCardsToSelectForOkurifuda}枚";
+            if (heishiOtetsukiDisplayText != null) heishiOtetsukiDisplayText.text = "選択待ち";
+        }
+        else if (currentOkurifudaSendingTeamInitial == "B")
+        {
+            if (heishiOtetsukiDisplayText != null) heishiOtetsukiDisplayText.text = $"送り札{remainingCardsToSelectForOkurifuda}枚";
+            if (genjiOtetsukiDisplayText != null) genjiOtetsukiDisplayText.text = "選択待ち";
+        }
+
+        Debug.LogWarning($"[送り札選択モード開始] {currentOkurifudaSendingTeamName}軍が{remainingCardsToSelectForOkurifuda}枚の送り札を選択してください。（札をクリックして選択）");
     }
 
 
-    // （将来的に、×ボタンが押された時の処理もここに追加します）
+
+
+    private void PerformOkurifuda(string answeringTeamInitial, FoundCardInfo opponentCardInfo)
+    {
+        if (WordDataManager.Instance == null)
+        {
+            Debug.LogError("[送り札処理] WordDataManager のインスタンスが見つかりません！処理を中断します。");
+            return;
+        }
+
+        string opponentTeamInitialChar = ""; // "A" or "B"
+        string answeringTeamName = "";
+        string opponentTeamName = "";
+        bool opponentCardRemoved = false;
+
+        if (answeringTeamInitial == "A") // 源氏が正解した場合
+        {
+            opponentTeamInitialChar = "B";
+            answeringTeamName = "源氏";
+            opponentTeamName = "平氏";
+            Debug.Log($"[相手札獲得処理] 相手（{opponentTeamName}軍）の札「{opponentCardInfo.Card.Word}」を削除します。");
+            if (WordDataManager.Instance.RemoveCardFromHeishiList(opponentCardInfo.IndexInList))
+            {
+                opponentCardRemoved = true;
+            }
+        }
+        else if (answeringTeamInitial == "B") // 平氏が正解した場合
+        {
+            opponentTeamInitialChar = "A";
+            answeringTeamName = "平氏";
+            opponentTeamName = "源氏";
+            Debug.Log($"[相手札獲得処理] 相手（{opponentTeamName}軍）の札「{opponentCardInfo.Card.Word}」を削除します。");
+            if (WordDataManager.Instance.RemoveCardFromGenjiList(opponentCardInfo.IndexInList))
+            {
+                opponentCardRemoved = true;
+            }
+        }
+        else
+        {
+            Debug.LogError($"[送り札処理] 無効な正解チーム識別子「{answeringTeamInitial}」です。");
+            return;
+        }
+        if (opponentCardRemoved)
+        {
+            // 正解チーム（answeringTeamInitial）は、相手（opponentTeamInitialChar）に1枚送る「義務」が発生する
+            if (answeringTeamInitial == "A") // 源氏が送る義務
+            {
+                currentQuestionOkurifudaFromGenji++;
+                Debug.Log($"[送り札義務記録] {answeringTeamName}軍が相手札獲得のため、{opponentTeamName}軍への送り札義務が1枚発生。現在の義務: {currentQuestionOkurifudaFromGenji}枚");
+            }
+            else if (answeringTeamInitial == "B") // 平氏が送る義務
+            {
+                currentQuestionOkurifudaFromHeishi++;
+                Debug.Log($"[送り札義務記録] {answeringTeamName}軍が相手札獲得のため、{opponentTeamName}軍への送り札義務が1枚発生。現在の義務: {currentQuestionOkurifudaFromHeishi}枚");
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"[相手札獲得処理] 相手の札「{opponentCardInfo.Card.Word}」の削除に失敗したか、元々存在しませんでした。そのため、送り札義務は発生しません。");
+        }
+    }
+    private void CheckForVictory()
+    {
+        if (WordDataManager.Instance == null)
+        {
+            Debug.LogError("[勝利条件チェック] WordDataManager のインスタンスが見つかりません！");
+            return;
+        }
+
+        // isGameEnded のようなフラグがあれば、ここでチェックして既に終了していたら return するのも良いでしょう。
+        // (現時点ではまだそのフラグはないので、このまま進めます)
+
+        int genjiCardCount = WordDataManager.Instance.GenjiSelectedCards.Count;
+        int heishiCardCount = WordDataManager.Instance.HeishiSelectedCards.Count;
+
+        Debug.Log($"[勝利条件チェック] 現在の札枚数 - 源氏: {genjiCardCount}枚, 平氏: {heishiCardCount}枚");
+
+        if (genjiCardCount <= 0 && heishiCardCount <= 0) // 両チーム同時に0枚になった場合 (引き分けの可能性)
+        {
+            Debug.LogWarning("[勝利条件チェック] 両チームの札が同時に0枚以下になりました！引き分け、または特別なルール判定が必要です。");
+            // TODO: 引き分けの場合の処理をどうするか、にぃぬさんのルールに合わせて後で実装しましょう。
+            //       ひとまず、ここではどちらかの勝利とはせず、DeclareWinnerも呼びません。
+            //       もしくは、先に0枚になった方を厳密に判定するロジックが必要ならそれも後で。
+            //       ここでは、一旦この状態をログに出すだけにします。
+            //       （一旦ゲームを止めるために DeclareWinner("引き分けなどの情報") を呼んでも良いかもしれません）
+        }
+        else if (genjiCardCount <= 0) // 源氏の札が0枚以下になった
+        {
+            DeclareWinner("源氏"); // 源氏軍の勝利
+        }
+        else if (heishiCardCount <= 0) // 平氏の札が0枚以下になった
+        {
+            DeclareWinner("平氏"); // 平氏軍の勝利
+        }
+        // それ以外の場合は、まだどちらも勝利していない
+    }
+    private void DeclareWinner(string winningTeamName)
+    {
+        Debug.LogWarning($"★★★★★ {winningTeamName}軍の勝利です！ ゲーム終了処理を開始します。 ★★★★★");
+
+        // 1. これ以上ゲームが進行しないように、全てのアクションボタンをロックする (これは既存の処理)
+        areActionButtonsLocked = true;
+        UpdateAllActionButtonsInteractableState(false);
+        if (nextQuestionButton != null)
+        {
+            nextQuestionButton.interactable = false;
+        }
+        // (もしあればUndoボタンなどもここで非活性化)
+
+        // 2. ★★★↓ここから勝利動画再生処理を追加↓★★★
+        if (victoryVideoRoot == null || victoryVideoPlayer == null || returnToSetupButton == null)
+        {
+            Debug.LogError("[勝利動画演出] 必要なUI参照（VictoryVideoRoot, VictoryVideoPlayer, ReturnToSetupButtonのいずれか）がインスペクターで未設定です。動画再生をスキップします。");
+            // TODO: 動画なしの場合のシンプルな勝利メッセージ表示などをここに書いても良い
+            return;
+        }
+
+        UnityEngine.Video.VideoClip clipToPlay = null;
+        if (winningTeamName == "源氏" && genjiVictoryVideoClip != null)
+        {
+            clipToPlay = genjiVictoryVideoClip;
+        }
+        else if (winningTeamName == "平氏" && heishiVictoryVideoClip != null)
+        {
+            clipToPlay = heishiVictoryVideoClip;
+        }
+
+        if (clipToPlay != null)
+        {
+            victoryVideoRoot.SetActive(true); // ★動画表示用の親GameObjectをアクティブに★
+            returnToSetupButton.gameObject.SetActive(false); // ★「準備画面に戻る」ボタンは動画再生中は非表示★
+
+            victoryVideoPlayer.clip = clipToPlay;
+            victoryVideoPlayer.isLooping = false;
+
+            victoryVideoPlayer.loopPointReached -= OnVictoryVideoEnd;
+            victoryVideoPlayer.loopPointReached += OnVictoryVideoEnd;
+
+            victoryVideoPlayer.prepareCompleted -= OnVictoryVideoPrepareCompleted; // 念のため既存を解除
+            victoryVideoPlayer.prepareCompleted += OnVictoryVideoPrepareCompleted; // ★新しいメソッドを登録★
+            victoryVideoPlayer.Prepare();
+            Debug.Log($"[勝利動画演出] {winningTeamName}軍勝利動画「{clipToPlay.name}」の再生準備を開始します。");
+        }
+        else
+        {
+            Debug.LogWarning($"[勝利動画演出] {winningTeamName}軍の勝利動画クリップが設定されていないか、チーム名が不正です。動画なしで終了します。");
+            // 動画がない場合は、すぐに「準備画面に戻る」ボタンを有効化しても良い
+            returnToSetupButton.gameObject.SetActive(true);
+        }
+        // ★★★↑ここまで勝利動画再生処理を追加↑★★★
+
+        // TODO: 将来的には、ここで結果表示画面に遷移したり、
+        //       「もう一度プレイしますか？」のようなUIを表示したりする処理を追加できます。
+    }
+
+    // ★★★↓新しいメソッドをここに追加します (勝利動画再生終了時に呼ばれる)↓★★★
+    private void OnVictoryVideoEnd(UnityEngine.Video.VideoPlayer vp)
+    {
+        Debug.Log("[勝利動画演出] 勝利動画の再生が終了しました。");
+        vp.loopPointReached -= OnVictoryVideoEnd; // 自身をイベントから解除（重要）
+
+        // 動画が終わったら「準備画面に戻る」ボタンを表示/有効化する
+        if (returnToSetupButton != null)
+        {
+            returnToSetupButton.gameObject.SetActive(true);
+            Debug.Log("[勝利動画演出] 「準備画面に戻る」ボタンを有効化しました。");
+        }
+        // 必要であれば、ここでVideoPlayerを停止したり、victoryVideoRootを非表示にするなどの後処理も可能
+        // vp.Stop();
+        // if (victoryVideoRoot != null) victoryVideoRoot.SetActive(false); // またはフェードアウトなど
+    }
+    /*private void ShowQuestionWithAnimation(FoundCardInfo correctCardLocationInfo, bool isCorrectAnswer)
+    {
+        Debug.LogWarning("[問題表示演出デバッグ] ShowQuestionWithAnimation メソッドが開始されました。(巻物集中バージョン)");
+
+        if (QuestionAnimationRoot == null) // ★追加：親オブジェクトの参照チェック
+        {
+            Debug.LogError("[問題表示演出] QuestionAnimationRoot がインスペクターで未設定です！");
+            return;
+        }
+
+        // 【ブロック0】演出用親オブジェクトをアクティブにする ★追加★
+        QuestionAnimationRoot.SetActive(true);
+        Debug.LogWarning("[問題表示演出デバッグ] QuestionAnimationRoot をアクティブにしました。");
+
+        // 【ブロック1】必要なUI部品やコンポーネントが正しく設定されているか最初に確認します
+        if (currentQuestionDisplayText == null || scrollVideoPlayer == null || questionDisplayAnimator == null)
+        {
+            Debug.LogError("[問題表示演出] 必要な参照（currentQuestionDisplayText, scrollVideoPlayer, questionDisplayAnimatorのいずれか）がインスペクターで未設定です！アニメーションを実行できません。");
+            QuestionAnimationRoot.SetActive(false); // エラーなので親を非アクティブに戻す
+            return;
+        }
+
+        Debug.LogWarning("[問題表示演出デバッグ] ★ブロック2（問題文セット処理）の直前★");
+        Debug.LogWarning($"[問題表示演出デバッグ] currentQuestionIndex は: {currentQuestionIndex}");
+        if (currentQuestionIndex != -1)
+        {
+            Debug.LogWarning($"[問題表示演出デバッグ] currentQuestionData.QuestionText は 「{(string.IsNullOrEmpty(currentQuestionData.QuestionText) ? "nullまたは空" : currentQuestionData.QuestionText)}」です。");
+        }
+
+        if (currentQuestionIndex != -1 && !string.IsNullOrEmpty(currentQuestionData.QuestionText))
+        {
+            currentQuestionDisplayText.text = currentQuestionData.QuestionText;
+            Debug.Log($"[問題表示演出] UIに問題文「{currentQuestionData.QuestionText}」を設定しました。");
+        }
+        else
+        {
+            if (currentQuestionDisplayText != null)
+            {
+                currentQuestionDisplayText.text = "エラー：問題文がありません。";
+            }
+            Debug.LogWarning($"[問題表示演出] 問題データがロードされていない(Index: {currentQuestionIndex})、または問題文(QuestionText)がnullか空のため、エラーメッセージを表示します。");
+        }
+        Debug.LogWarning("[問題表示演出デバッグ] ★ブロック2の直後、ブロック3（Animatorトリガー）の直前★");
+
+
+        // 【ブロック3】Animatorのトリガーを引いて、巻物の表示アニメーションを開始させます。
+        questionDisplayAnimator.SetTrigger("ShowQuestionTrigger");
+        Debug.Log("[問題表示演出] Animatorの「ShowQuestionTrigger」をセットしました。(巻物表示アニメーション開始のはず)");
+
+        // 【ブロック4】巻物動画の再生を開始します。
+        if (scrollVideoPlayer.isPrepared)
+        {
+            scrollVideoPlayer.Stop();
+            // Debug.Log("[動画制御] scrollVideoPlayer.Stop() を呼び出しました (再生開始前)。"); // ログが多すぎるので一旦コメントアウトも可
+            scrollVideoPlayer.loopPointReached -= EndReached;
+            scrollVideoPlayer.loopPointReached += EndReached;
+            scrollVideoPlayer.Play();
+            Debug.Log("[問題表示演出] 巻物動画(scrollVideoPlayer)の再生を開始しました。(isPrepared)");
+        }
+        else
+        {
+            scrollVideoPlayer.Stop();
+            // Debug.Log("[動画制御] scrollVideoPlayer.Stop() を呼び出しました (Prepare前)。"); // ログが多すぎるので一旦コメントアウトも可
+            scrollVideoPlayer.prepareCompleted -= OnVideoPrepared;
+            scrollVideoPlayer.prepareCompleted += OnVideoPrepared;
+            scrollVideoPlayer.Prepare();
+            Debug.LogWarning("[問題表示演出デバッグ] Video Player の Prepare() を呼び出しました。完了待ち。");
+        }
+        StopCoroutinesForQuestionDisplay(); // ★専用のメソッドでコルーチンを止めるのがより安全（後述）★
+        Debug.LogWarning("[コルーチン制御] 新しい演出開始のため、既存の表示関連コルーチンを停止しました（もしあれば）。");
+
+
+        {
+            Debug.LogWarning("[正解札演出] 拡大対象の正解札情報が無効（Wordがnull）なため、拡大表示は行いません。");
+            _enlargeCardCoroutine = null;
+        }
+
+        // 9秒後に QuestionAnimationRoot を非アクティブにするコルーチンを開始し、参照を保存
+        _deactivateDisplayCoroutine = StartCoroutine(DeactivateQuestionDisplayAfterDelay(9.0f));
+    }
+
+
+
+    // (コルーチンを個別に管理・停止するためのメソッド例：これは任意ですが推奨)
+    private Coroutine _enlargeCardCoroutine = null;
+    private Coroutine _deactivateDisplayCoroutine = null;
+
+    private void StopCoroutinesForQuestionDisplay()
+    {
+        if (_enlargeCardCoroutine != null)
+        {
+            StopCoroutine(_enlargeCardCoroutine);
+            _enlargeCardCoroutine = null;
+            Debug.LogWarning("[コルーチン制御] EnlargeCorrectCardAfterDelay コルーチンを停止しました。");
+        }
+        if (_deactivateDisplayCoroutine != null)
+        {
+            StopCoroutine(_deactivateDisplayCoroutine);
+            _deactivateDisplayCoroutine = null;
+            Debug.LogWarning("[コルーチン制御] DeactivateQuestionDisplayAfterDelay コルーチンを停止しました。");
+        }
+    }
+
+
+    private IEnumerator DeactivateQuestionDisplayAfterDelay(float delay)
+    {
+        Debug.Log($"[問題表示演出] {delay}秒後に QuestionAnimationRoot を非アクティブにするタイマーを開始。");
+        yield return new WaitForSeconds(delay); // 指定された秒数だけ待機
+
+        if (QuestionAnimationRoot != null)
+        {
+            QuestionAnimationRoot.SetActive(false);
+            Debug.Log($"[問題表示演出] {delay}秒経過したため、QuestionAnimationRoot を非アクティブにしました。");
+
+            FinalizeQuestionResolution();
+        }
+    }*/
+
+    // VideoPlayer.prepareCompleted イベントに対応するメソッド
+    /*private void OnVideoPrepared(UnityEngine.Video.VideoPlayer source)
+    {
+        Debug.LogWarning("[問題表示演出デバッグ] Video Prepare Completed (OnVideoPrepared経由). 再生を開始します。");
+        source.prepareCompleted -= OnVideoPrepared; // 一度呼ばれたら解除
+        source.loopPointReached -= EndReached;    // 念のため既存のリスナーを解除してから追加
+        source.loopPointReached += EndReached;
+        source.Play();
+        Debug.Log("[問題表示演出] 巻物動画(scrollVideoPlayer)の再生を開始しました。(prepareCompleted経由)");
+    }
+
+    void EndReached(UnityEngine.Video.VideoPlayer vp)
+    {
+        Debug.Log("[問題表示演出] 巻物動画の再生が終了ポイントに到達しました (EndReachedイベント)。");
+        vp.loopPointReached -= EndReached; // イベントリスナーの解除は重要なので残します
+
+        vp.Pause(); // ★シンプルにPauseのみ呼び出し★
+        Debug.Log($"[動画制御] vp.Pause() を呼び出しました。VideoPlayerの状態: isPlaying={vp.isPlaying}, isPaused={vp.isPaused}, time={vp.time}, frame={vp.frame}");
+
+        // 最後のフレームが表示されているか、より詳しく確認
+        if (vp.isPaused && vp.texture != null) // 一時停止していて、描画先のテクスチャがあれば
+        {
+            Debug.Log($"[動画制御] 動画は一時停止中です。表示されているはずのフレーム: {vp.frame} / 総フレーム数: {vp.frameCount}。テクスチャサイズ: {vp.texture.width}x{vp.texture.height}");
+        }
+        else if (vp.isPaused)
+        {
+            Debug.LogWarning($"[動画制御] 動画は一時停止中ですが、vp.textureがnullです。Render Textureが正しく設定・機能しているか確認してください。フレーム: {vp.frame}");
+        }
+        else
+        {
+            Debug.LogWarning($"[動画制御] 動画は一時停止していません。isPlaying: {vp.isPlaying}");
+        }
+    }
+    private void FinalizeQuestionResolution()
+    {
+        Debug.LogWarning("[処理確定] 演出終了。これより札の移動処理などを開始します。");
+
+    }*/
+    /*    private IEnumerator EnlargeCorrectCardAfterDelay(FoundCardInfo correctCardLocationInfo, float delay, bool isCorrectAnswer)
+        {
+            Debug.Log($"[正解札演出] 「{correctCardLocationInfo.Card.Word}」の拡大表示を {delay}秒後に開始するコルーチンが起動しました。");
+            yield return new WaitForSeconds(delay);
+
+            if (playableCanvasManagerInstance == null)
+            {
+                Debug.LogError("[正解札演出] playableCanvasManagerInstance が null のため、札の WordCardUI を検索できません。");
+                yield break;
+            }
+
+            WordCardUI targetCardUI = playableCanvasManagerInstance.FindWordCardByWord(correctCardLocationInfo.Card.Word);
+
+            if (targetCardUI != null)
+            {
+                float targetScaleFactor = 2.0f;
+                float animationDuration = 0.5f;
+                Vector3 targetPositionInLocalSpace = targetCardUI.transform.localPosition;
+
+                // 拡大アニメーション実行
+                yield return StartCoroutine(targetCardUI.PlayEnlargeAnimation(targetScaleFactor, animationDuration, targetPositionInLocalSpace));
+
+                // ↓★★★ここを「10秒待機」に変更★★★
+                float waitTime = 10.0f;
+                Debug.Log($"[正解札演出] 拡大状態で{waitTime}秒間待機します。");
+                yield return new WaitForSeconds(waitTime);
+
+                // 10秒後、UI上からも札を消す（非表示にする・DestroyでもOK）
+                // 10秒後…
+                yield return new WaitForSeconds(10.0f);
+
+                // 画面から札を確実に消す
+                if (targetCardUI != null)
+                {
+                    GameObject cardObj = targetCardUI.gameObject;
+                    Debug.Log($"[正解札演出] 札「{correctCardLocationInfo.Card.Word}」をDestroyします。");
+                    GameObject.Destroy(cardObj);
+                }
+
+                // データリストからも削除（今のまま）
+                if (WordDataManager.Instance != null)
+                {
+                    switch (correctCardLocationInfo.Location)
+                    {
+                        case CardLocationType.Genji:
+                            WordDataManager.Instance.RemoveCardFromGenjiList(correctCardLocationInfo.IndexInList);
+                            break;
+                        case CardLocationType.Heishi:
+                            WordDataManager.Instance.RemoveCardFromHeishiList(correctCardLocationInfo.IndexInList);
+                            break;
+                        case CardLocationType.Empty:
+                            WordDataManager.Instance.RemoveCardFromEmptyList(correctCardLocationInfo.IndexInList);
+                            break;
+                    }
+                }
+                else
+                {
+                    Debug.LogError("[データ処理] WordDataManager.Instance が null のため、札の削除ができません。");
+                }
+
+                // 再描画
+                if (this.playableCanvasManagerInstance != null)
+                {
+                    this.playableCanvasManagerInstance.RefreshAllCardDisplays();
+                }
+
+
+                // 勝敗判定（札が無くなった直後に判定したい場合はここ）
+                CheckForVictory();
+            }
+            else
+            {
+                Debug.LogWarning($"[正解札演出] 拡大対象の札「{correctCardLocationInfo.Card.Word}」が、現在の画面上(PlayableCanvas)に見つかりませんでした。");
+            }
+        }*/
+
+    private void UpdateOtetsukiStatusDisplay()
+    {
+        int genjiMistakes = currentQuestionGenjiOtetsukiCount;
+        int heishiMistakes = currentQuestionHeishiOtetsukiCount;
+
+        string genjiDisplayText = ""; // 源氏軍の表示テキスト
+        string heishiDisplayText = ""; // 平氏軍の表示テキスト
+
+        if (genjiMistakes > heishiMistakes)
+        {
+
+            int cardsHeishiWillSend = genjiMistakes - heishiMistakes;
+            heishiDisplayText = $"送り札{cardsHeishiWillSend}枚"; // 平氏が送る枚数を表示
+            genjiDisplayText = "送り札0枚"; // 源氏は送らないので0枚（または空文字 "" でもOK）
+        }
+        else if (heishiMistakes > genjiMistakes)
+        {
+            // 平氏の方がお手つきが多い場合、その差の分だけ源氏から平氏へ送り札
+            int cardsGenjiWillSend = heishiMistakes - genjiMistakes;
+            genjiDisplayText = $"送り札{cardsGenjiWillSend}枚"; // 源氏が送る枚数を表示
+            heishiDisplayText = "送り札0枚"; // 平氏は送らないので0枚（または空文字 "" でもOK）
+        }
+        else // 同数の場合
+        {
+            genjiDisplayText = "送り札0枚";
+            heishiDisplayText = "送り札0枚";
+        }
+
+        // 実際のUI部品にテキストを設定
+        if (genjiOtetsukiDisplayText != null)
+        {
+            genjiOtetsukiDisplayText.text = genjiDisplayText;
+        }
+        if (heishiOtetsukiDisplayText != null)
+        {
+            heishiOtetsukiDisplayText.text = heishiDisplayText;
+        }
+        Debug.Log($"[お手つき表示更新] 源氏:「{genjiDisplayText}」, 平氏:「{heishiDisplayText}」");
+    }
+    private IEnumerator ShowFinalOkurifudaMessage(string message, float displayDuration)
+    {
+        if (finalOkurifudaDisplayGroup == null || finalOkurifudaDisplayText == null)
+        {
+            Debug.LogError("[最終送り札表示] finalOkurifudaDisplayGroup または finalOkurifudaDisplayText がインスペクターで未設定です。");
+            yield break; // コルーチンを終了
+        }
+
+        // 1. メッセージを設定し、表示グループをアクティブにする
+        finalOkurifudaDisplayText.text = message;
+        finalOkurifudaDisplayGroup.SetActive(true);
+        Debug.Log($"[最終送り札表示] メッセージ表示開始: 「{message}」");
+
+        // 2. 指定された時間だけ待機する
+        yield return new WaitForSeconds(displayDuration);
+
+        // 3. 表示グループを非アクティブにする
+        finalOkurifudaDisplayGroup.SetActive(false);
+        finalOkurifudaDisplayText.text = ""; // テキストもクリアしておくと次回に影響しにくい
+        Debug.Log($"[最終送り札表示] {displayDuration}秒経過。メッセージ表示終了。");
+    }
+
+    private void UpdateTeamOkurifudaCountDisplay(string teamInitial, int count, bool isWaitingToReceive = false)
+    {
+        TextMeshProUGUI targetDisplay = null;
+        string teamDisplayName = "";
+
+        if (teamInitial == "A")
+        {
+            targetDisplay = genjiOtetsukiDisplayText; // ★にぃぬさんの既存UI部品を指定★
+            teamDisplayName = "源氏";
+        }
+        else if (teamInitial == "B")
+        {
+            targetDisplay = heishiOtetsukiDisplayText; // ★にぃぬさんの既存UI部品を指定★
+            teamDisplayName = "平氏";
+        }
+
+        if (targetDisplay != null)
+        {
+            if (isOkurifudaSelectionMode && currentOkurifudaSendingTeamInitial == teamInitial)
+            {
+                targetDisplay.text = $"送り札残り: {count}枚"; // 送る側の表示
+            }
+            else if (isOkurifudaSelectionMode && isWaitingToReceive)
+            {
+                targetDisplay.text = "相手の選択待ち"; // 受け取る側の表示（案）
+            }
+            else // 通常のお手つき表示（または選択モードでない側の表示）
+            {
+                int currentOtetsuki = (teamInitial == "A") ? currentQuestionGenjiOtetsukiCount : currentQuestionHeishiOtetsukiCount;
+                targetDisplay.text = $"お手つき: {currentOtetsuki}回"; // または以前の「送り札N枚」表示
+            }
+        }
+    }
+    public void HandleOkurifudaCandidateSelection(WordCardUI clickedCardUI)
+    {
+        if (!isOkurifudaSelectionMode) return; // 送り札選択モードでなければ何もしない
+
+        if (clickedCardUI == null)
+        {
+            Debug.LogError("[送り札選択] クリックされたカードの参照がnullです。");
+            return;
+        }
+
+        if (lastClickedOkurifudaCandidate == clickedCardUI)
+        {
+            // --- 2回目のクリック：同じ札が再度クリックされたので「送り札として決定」 ---
+            Debug.Log($"[送り札選択] 札「{clickedCardUI.GetWord()}」が2回目クリックされました。送り札として決定します。");
+
+            clickedCardUI.SetConfirmedForOkurifuda();   // ★新しいメソッドを呼び出し、背景色を黄色（確定色）にする★
+
+            if (!selectedOkurifudaCandidates.Contains(clickedCardUI)) // まだリストになければ追加
+            {
+                selectedOkurifudaCandidates.Add(clickedCardUI);
+            }
+
+            remainingCardsToSelectForOkurifuda--;
+
+            if (currentOkurifudaSendingTeamInitial == "A" && genjiOtetsukiDisplayText != null)
+                genjiOtetsukiDisplayText.text = $"送り札{remainingCardsToSelectForOkurifuda}枚";
+            else if (currentOkurifudaSendingTeamInitial == "B" && heishiOtetsukiDisplayText != null)
+                heishiOtetsukiDisplayText.text = $"送り札 {remainingCardsToSelectForOkurifuda}枚";
+
+            Debug.Log($"[送り札選択] 札「{clickedCardUI.GetWord()}」を送り札として決定。残り選択枚数: {remainingCardsToSelectForOkurifuda}");
+
+            lastClickedOkurifudaCandidate = null; // 「最後に1回目にクリックされた札」情報をリセット
+
+            if (remainingCardsToSelectForOkurifuda == 0)
+            {
+                // 全ての送り札の選択が完了した場合
+                Debug.LogWarning($"[送り札選択] 全ての送り札 ({numberOfCardsToSelectForOkurifuda}枚) の選択が完了しました！実際の札移動処理を開始します。");
+                isOkurifudaSelectionMode = false; // 送り札選択モードを終了
+
+                // 実際に選択された札リストを使って札を移動させるコルーチンを開始
+                StartCoroutine(ExecuteOkurifudaTransfer(new List<WordCardUI>(selectedOkurifudaCandidates)));
+
+                selectedOkurifudaCandidates.Clear(); // 候補リストをクリア（次の選択のために）
+
+                // UIを通常の状態に戻す (指示テキストを消す、ボタンロック解除など)
+                if (finalOkurifudaDisplayGroup != null) finalOkurifudaDisplayGroup.SetActive(false); // 指示メッセージを消す
+                if (nextQuestionButton != null) nextQuestionButton.interactable = true;
+            }
+        }
+        else
+        {
+            // --- 1回目のクリック：新しい札が選択候補になった ---
+            // (既に必要な枚数を選択し終えていれば、新しい札は選択できないようにする)
+            if (selectedOkurifudaCandidates.Count >= numberOfCardsToSelectForOkurifuda)
+            {
+                Debug.LogWarning($"[送り札選択] 既に必要な枚数({numberOfCardsToSelectForOkurifuda}枚)の送り札を選択済みのため、新しい札は選択できません。");
+                return;
+            }
+
+            if (lastClickedOkurifudaCandidate != null)
+            {
+                lastClickedOkurifudaCandidate.SetSelectedForOkurifuda(false); // 前の選択候補の見た目を元に戻す
+            }
+
+            lastClickedOkurifudaCandidate = clickedCardUI; // 今回の札を新しい選択候補として記憶
+            clickedCardUI.SetSelectedForOkurifuda(true);   // 今回の札の見た目を選択中にする
+            Debug.Log($"[送り札選択] 札「{clickedCardUI.GetWord()}」が1回目クリックされました。選択候補になりました。");
+        }
+    }
+
+    private IEnumerator ExecuteOkurifudaTransfer(List<WordCardUI> cardsToSend)
+    {
+        if (WordDataManager.Instance == null || playableCanvasManagerInstance == null)
+        {
+            Debug.LogError("[送り札実行] WordDataManager または PlayableCanvasManager の参照がありません！処理を中断します。");
+            isOkurifudaSelectionMode = false;
+            yield break;
+        }
+
+        // ★★★★【ここが重要】Undo用に状態を保存します！★★★★
+        SaveStateForUndo(currentQuestionGenjiOtetsukiCount, currentQuestionHeishiOtetsukiCount, currentQuestionOkurifudaFromGenji, currentQuestionOkurifudaFromHeishi);
+        Debug.LogWarning("[Undo保存] 送り札実行前に状態を保存しました（ExecuteOkurifudaTransfer内）");
+
+        if (cardsToSend == null || cardsToSend.Count == 0)
+        {
+            Debug.LogWarning("[送り札実行] 送るべき札のリストが空です。処理をスキップします。");
+            isOkurifudaSelectionMode = false;
+            // UpdateTeamOtetsukiStatusDisplay(); // 仮: 両チームの表示をリセット
+            yield break;
+        }
+
+        Debug.LogWarning($"[送り札実行] ★★ {currentOkurifudaSendingTeamName}軍から{currentOkurifudaReceivingTeamName}軍へ、選択された {cardsToSend.Count}枚 の札を実際に送ります。 ★★");
+
+        string sendingTeamInitial = currentOkurifudaSendingTeamInitial;
+        string receivingTeamInitial = (sendingTeamInitial == "A") ? "B" : "A";
+        int cardsSuccessfullySentCount = 0;
+
+        // 選択された各カードに対して処理を行う (foreach ループは1つだけ)
+        foreach (WordCardUI cardUI in cardsToSend)
+        {
+            if (cardUI == null)
+            {
+                Debug.LogWarning("[送り札実行] リスト内のcardUIがnullのためスキップします。");
+                continue;
+            }
+
+            SelectableWordEntry cardData = new SelectableWordEntry(cardUI.GetCardNumber(), cardUI.GetWord());
+
+            // ★★★↓ここからが置き換える処理です↓★★★
+            // 1. 送り元チームのリストから該当の札を「データ上」削除する
+            bool removedSuccessfully = WordDataManager.Instance.RemoveSpecificCardFromTeam(sendingTeamInitial, cardData);
+
+            if (removedSuccessfully)
+            {
+                Debug.Log($"[送り札実行] 送り元({sendingTeamInitial})のリストから札「{cardData.Word}」(番号:{cardData.DisplayNumber}) をデータ上削除しました。");
+
+                // 2. 受け取り先チームにその札を追加する
+                WordDataManager.Instance.AddSelectedCardToTeam(receivingTeamInitial, cardData);
+                cardsSuccessfullySentCount++;
+            }
+            else
+            {
+                // 送り元のリストから削除できなかった場合
+                Debug.LogError($"[送り札実行エラー] 送り元({sendingTeamInitial})のリストから札「{cardData.Word}」(番号:{cardData.DisplayNumber}) の削除に失敗しました。相手チームへの追加は行いません。");
+            }
+
+            // 送り札として処理したので、もし選択中の見た目になっていたら元に戻す
+            cardUI.SetSelectedForOkurifuda(false);
+            // ★★★↑ここまでが置き換える処理です↑★★★
+        }
+
+        // 画面全体の再描画と勝利判定は、ループが終わった後に一度だけ行う
+        if (cardsSuccessfullySentCount > 0) // 実際に1枚でも札が送られた（または送ろうとしたがエラーになった場合でも画面更新は必要かも）
+        {
+            Debug.Log("[送り札実行] PlayableCanvasManagerに札表示の更新を指示します。");
+            playableCanvasManagerInstance.RefreshAllCardDisplays();
+            CheckForVictory();
+        }
+        // ↓↓↓ この1行のログを追加してください ↓↓↓
+        Debug.LogWarning($"[最終メッセージ表示前チェック] cardsSuccessfullySentCount: {cardsSuccessfullySentCount}, cardsToSend.Count: {(cardsToSend != null ? cardsToSend.Count.ToString() : "null")}");
+        // ↑↑↑ この1行のログを追加してください ↑↑↑
+
+        // 最終的な送り札メッセージを表示する
+        if (cardsSuccessfullySentCount > 0)
+        {
+            string message = $"{currentOkurifudaSendingTeamName}軍から{currentOkurifudaReceivingTeamName}軍へ {cardsSuccessfullySentCount}枚 の送り札が実行されました。";
+            float messageDisplayDuration = 3.0f; // 表示時間は以前調整済み
+            StartCoroutine(ShowFinalOkurifudaMessage(message, messageDisplayDuration));
+        }
+        else if (cardsToSend.Count > 0 && cardsSuccessfullySentCount == 0)
+        {
+            string message = $"{currentOkurifudaSendingTeamName}軍から{currentOkurifudaReceivingTeamName}軍への送り札は、{cardsToSend.Count}枚試みましたが、送れる札がなかった等の理由で実行されませんでした。";
+            StartCoroutine(ShowFinalOkurifudaMessage(message, 3.0f));
+        }
+
+        Debug.Log($"[送り札実行] {currentOkurifudaSendingTeamName}軍から{currentOkurifudaReceivingTeamName}軍への札送り処理完了。実際に送った枚数: {cardsSuccessfullySentCount}枚 / 指示枚数: {cardsToSend.Count}枚");
+        
+
+        currentPhase = QuizGamePhase.OkurifudaCompleted;
+        Debug.LogWarning("[フェーズ遷移] 全ての送り札が完了したので、フェーズを『OkurifudaCompleted』に移行しました。");
+        yield break; // メソッドの最後に移動
+
+    }
+    public bool IsCardValidForOkurifudaSelectionHover(WordCardUI cardUI)
+    {
+        if (!isOkurifudaSelectionMode || cardUI == null)
+        {
+            return false; // 送り札選択モードでない、またはカードが無効なら対象外
+        }
+
+        // cardUIの所属チームを特定する (これは少し工夫が必要)
+        // 例えば、cardUIの親オブジェクトが、源氏のグリッドか平氏のグリッドかで判断する
+        string cardOwnerTeamInitial = "";
+        if (cardUI.transform.IsChildOf(playableCanvasManagerInstance.genjiObtainedCardsGrid_Playable)) // playableCanvasManagerInstanceにグリッドの参照がある前提
+        {
+            cardOwnerTeamInitial = "A";
+        }
+        else if (cardUI.transform.IsChildOf(playableCanvasManagerInstance.heishiObtainedCardsGrid_Playable)) // 同上
+        {
+            cardOwnerTeamInitial = "B";
+        }
+
+        if (cardOwnerTeamInitial == currentOkurifudaSendingTeamInitial)
+        {
+            // さらに、まだ「送り札」として選択されていない札のみを対象とする (selectedOkurifudaCandidatesに入っていない)
+            if (!selectedOkurifudaCandidates.Contains(cardUI)) // selectedOkurifudaCandidatesは送り札候補リスト
+            {
+                // そして、1回目のクリックで「選択中」になっている札は拡大しない（または別の拡大）ようにしたい場合もある
+                // if (lastClickedOkurifudaCandidate == cardUI) return false; // 既に選択候補ならさらに拡大はしない、など
+
+                return true; // 送り元のチームの、まだ決定していない札なら拡大OK
+            }
+        }
+        return false; // それ以外は対象外
+    }
+
+    private void OnVictoryVideoPrepareCompleted(UnityEngine.Video.VideoPlayer source)
+    {
+        Debug.Log($"[勝利動画演出] {source.clip.name} の準備完了。再生開始。");
+        source.prepareCompleted -= OnVictoryVideoPrepareCompleted; // 自分自身を解除
+        source.Play();
+    }
+
+    private void RestoreAllPlayerStates()
+    {
+        if (lastGenjiPlayersSnapshot != null && genjiPlayers.Count == lastGenjiPlayersSnapshot.Count)
+        {
+            for (int i = 0; i < genjiPlayers.Count; i++)
+                genjiPlayers[i].RestoreStateFromSnapshot(lastGenjiPlayersSnapshot[i]);
+        }
+
+        if (lastHeishiPlayersSnapshot != null && heishiPlayers.Count == lastHeishiPlayersSnapshot.Count)
+        {
+            for (int i = 0; i < heishiPlayers.Count; i++)
+                heishiPlayers[i].RestoreStateFromSnapshot(lastHeishiPlayersSnapshot[i]);
+        }
+    }
+
+    private void RestoreCounters()
+    {
+        currentQuestionGenjiOtetsukiCount = lastCurrentQuestionGenjiOtetsukiCount;
+        currentQuestionHeishiOtetsukiCount = lastCurrentQuestionHeishiOtetsukiCount;
+        currentQuestionOkurifudaFromGenji = lastCurrentQuestionOkurifudaFromGenji;
+        currentQuestionOkurifudaFromHeishi = lastCurrentQuestionOkurifudaFromHeishi;
+    }
+
+    private void RefreshAllUI()
+    {
+        playableCanvasManagerInstance?.RefreshAllCardDisplays();
+        UpdateAllPlayerCorrectCountDisplays();
+        UpdateOtetsukiStatusDisplay();
+        UpdateAllActionButtonsInteractableState(true);
+        nextQuestionButton.interactable = true;
+    }
+
+
+
+    private IEnumerator HandleCorrectAnswerSequence(string answeringTeamInitial, int playerIndex)
+    {
+        // --- 1. 正解者と正解札の情報を特定 ---
+        QuizPlayer answeringPlayer = (answeringTeamInitial == "A") ? genjiPlayers[playerIndex] : heishiPlayers[playerIndex];
+
+        if (currentQuestionIndex == -1 || string.IsNullOrEmpty(currentQuestionData.AnswerWord))
+        {
+            Debug.LogError("[マスターコルーチン] 問題データまたは答えのワードが不明なため、処理を中断します。");
+            areActionButtonsLocked = false;
+            UpdateAllActionButtonsInteractableState(true);
+            yield break;
+        }
+
+        FoundCardInfo cardInfo = FindMatchingCardLocation(currentQuestionData.AnswerWord);
+        WordCardUI targetCardToAnimate = playableCanvasManagerInstance?.FindWordCardByWord(cardInfo.Card.Word);
+
+        Debug.Log($"[マスターコルーチン] {answeringPlayer.PlayerName}が札「{cardInfo.Card.Word}」({cardInfo.Location})に正解。シーケンス開始。");
+
+        // --- 2. 正解者の正解数をインクリメントし、表示を更新 ---
+        answeringPlayer.IncrementCorrectAnswers();
+        UpdatePlayerCorrectCountDisplay(answeringTeamInitial, playerIndex);
+
+        // --- 3. 問題表示と正解札の拡大アニメーションを開始 ---
+        // （「問題表示アニメーション」関連はすべて止めている、とのことなので、この呼び出しはコメントアウトしておきます。
+        //   もし、巻物や問題文の表示を復活させたい場合は、このコメントアウトを解除してください。）
+        // ShowQuestionWithAnimation(cardInfo, true);
+
+        // 正解札の拡大アニメーションだけは実行
+        if (targetCardToAnimate != null)
+        {
+            float targetScaleFactor = 2.0f;
+            float animationDuration = 0.5f;
+            Vector3 targetPosition = targetCardToAnimate.transform.localPosition;
+
+            Debug.LogWarning($"[マスターコルーチン] 正解札「{cardInfo.Card.Word}」の拡大アニメーションを開始します。");
+            yield return StartCoroutine(targetCardToAnimate.PlayEnlargeAnimation(targetScaleFactor, animationDuration, targetPosition));
+        }
+
+        // 拡大された状態を少しの間見せるための待機
+        float visualHoldDuration = 6.5f; // 表示維持時間（お好みで調整してください）
+        Debug.Log($"[マスターコルーチン] 表示維持のため {visualHoldDuration}秒 待ちます。");
+        yield return new WaitForSeconds(visualHoldDuration);
+
+        // --- 4. 演出終了後のデータ処理 ---
+        Debug.Log("[マスターコルーチン] データ処理を開始します。");
+        // UIオブジェクトを消去
+        if (targetCardToAnimate != null)
+        {
+            GameObject.Destroy(targetCardToAnimate.gameObject);
+            Debug.Log($"[マスターコルーチン] 正解札のUIオブジェクト「{targetCardToAnimate.gameObject.name}」を消去しました。");
+        }
+
+        // 正解した札の種類に応じて、データ上の処理を行う
+        switch (cardInfo.Location)
+        {
+            case CardLocationType.Genji:
+                if (answeringTeamInitial == "A") // 源氏が自陣の札を取った
+                {
+                    WordDataManager.Instance.RemoveCardFromGenjiList(cardInfo.IndexInList);
+                }
+                else // 平氏が源氏の札を取った
+                {
+                    PerformOkurifuda("B", cardInfo);
+                }
+                break;
+            case CardLocationType.Heishi:
+                if (answeringTeamInitial == "B") // 平氏が自陣の札を取った
+                {
+                    WordDataManager.Instance.RemoveCardFromHeishiList(cardInfo.IndexInList);
+                }
+                else // 源氏が平氏の札を取った
+                {
+                    PerformOkurifuda("A", cardInfo);
+                }
+                break;
+            case CardLocationType.Empty:
+                if (answeringTeamInitial == "A") { currentQuestionOkurifudaFromHeishi++; }
+                else { currentQuestionOkurifudaFromGenji++; }
+                WordDataManager.Instance.RemoveCardFromEmptyList(cardInfo.IndexInList);
+                break;
+        }
+
+        // --- 5. お手つきペナルティ計算と、最終的な札移動 ---
+        ProcessAndExecuteOtetsukiPenalties();
+
+        // ProcessAndExecuteOtetsukiPenaltiesから呼ばれるAttemptSendOtetsukiCards、
+        // そしてその先のExecuteOkurifudaTransferの中で画面更新(RefreshAllCardDisplays)と勝利判定(CheckForVictory)が
+        // 行われるので、ここでは不要です。
+
+        // --- 6. 「次の問題へ」ボタンを有効化 ---
+        if (nextQuestionButton != null)
+        {
+            bool canGoNext = (WordDataManager.Instance != null && WordDataManager.Instance.MasterQuizDataList != null &&
+                              currentQuestionIndex < WordDataManager.Instance.MasterQuizDataList.Count - 1);
+            nextQuestionButton.interactable = canGoNext;
+            Debug.Log($"[進行制御] 「次の問題」ボタンを interactable = {canGoNext} に設定しました。");
+            // ★★★↓ここに追加します↓★★★
+            //currentPhase = QuizGamePhase.OkurifudaCompleted;
+            //Debug.LogWarning($"[フェーズ更新] 正解処理が完了したため、フェーズを {currentPhase} に設定しました。");
+            // ★★★↑ここまで↑★★★
+        }
+
+        Debug.LogWarning($"[マスターコルーチン] 正解処理シーケンス完了。");
+    }
+
 }
