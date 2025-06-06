@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic; // List を使うために必要
 using TMPro; // もしWordCardUIがTextMeshProUGUIを直接操作する場合に備えて(通常は不要)
-using System.Text; // ← ★★★この行を確認・追加してください★★★
+using System.Text;
 
 
 public class PlayableCanvasManager : MonoBehaviour
@@ -21,111 +21,73 @@ public class PlayableCanvasManager : MonoBehaviour
 
     // このCanvasが表示された時に呼び出されるお仕事
     void OnEnable()
-    {
-        Debug.Log("PlayableCanvasManager: OnEnable() が呼び出されました。獲得札の表示を開始します。");
-        DisplayObtainedCards();
+    {   Debug.Log("PlayableCanvasManager: OnEnable() が呼び出されました。獲得札の表示を開始します。");
+        RefreshAllCardDisplays(); // ★変更：新しい再表示関数を呼び出すようにする★
         DisplayPlayerNames(); // ★追加★
     }
-
-    public void DisplayObtainedCards()
+    public void RefreshAllCardDisplays()
     {
+        Debug.Log("PlayableCanvasManager: 札表示の更新を開始します...");
+
+        // １．まず、現在表示されている可能性のある全ての札をクリアします
+        ClearGrid(genjiObtainedCardsGrid_Playable);
+        ClearGrid(heishiObtainedCardsGrid_Playable);
+        if (emptyCardsGrid_Playable != null) // 空札グリッドも忘れずにクリア
+        {
+            ClearGrid(emptyCardsGrid_Playable);
+        }
+        Debug.Log("PlayableCanvasManager: 既存の札表示を全てクリアしました。");
+
+        // ２．WordDataManagerから最新の札情報を取得して表示します（ここのロジックはDisplayObtainedCardsとほぼ同じです）
         if (WordDataManager.Instance == null)
         {
-            Debug.LogError("PlayableCanvasManager: WordDataManagerのインスタンスが見つかりません！");
+            Debug.LogError("PlayableCanvasManager: WordDataManagerのインスタンスが見つかりません！札を表示できません。");
             return;
-
-            // ★↓源氏軍の獲得札リストを確認↓★
-            List<SelectableWordEntry> genjiCards = WordDataManager.Instance.GenjiSelectedCards;
-            if (genjiCards == null)
-            {
-                Debug.LogError("PlayableCanvasManager: 源氏軍の獲得札リスト(GenjiSelectedCards)がnullです！");
-            }
-            else
-            {
-                Debug.Log($"PlayableCanvasManager: 源氏軍の獲得札リストの数: {genjiCards.Count}");
-                if (genjiCards.Count > 0)
-                {
-                    Debug.Log($"PlayableCanvasManager: 源氏軍の最初の獲得札: {genjiCards[0].DisplayNumber}:{genjiCards[0].Word}");
-                }
-                // ★↓平氏軍の獲得札リストも同様に確認↓★
-                List<SelectableWordEntry> heishiCards = WordDataManager.Instance.HeishiSelectedCards;
-                if (heishiCards == null)
-                {
-                    Debug.LogError("PlayableCanvasManager: 平氏軍の獲得札リスト(HeishiSelectedCards)がnullです！");
-                }
-                else
-                {
-                    Debug.Log($"PlayableCanvasManager: 平氏軍の獲得札リストの数: {heishiCards.Count}");
-                    if (heishiCards.Count > 0)
-                    {
-                        Debug.Log($"PlayableCanvasManager: 平氏軍の最初の獲得札: {heishiCards[0].DisplayNumber}:{heishiCards[0].Word}");
-                    }
-                }
-                // ★↑ここまで↑★
-            }
-            // ★↑ここまで↑★
         }
         if (wordCardPrefab_Playable == null) { Debug.LogError("PlayableCanvasManager: wordCardPrefab_Playableが未設定！"); return; }
         if (genjiObtainedCardsGrid_Playable == null) { Debug.LogError("PlayableCanvasManager: genjiObtainedCardsGrid_Playableが未設定！"); return; }
         if (heishiObtainedCardsGrid_Playable == null) { Debug.LogError("PlayableCanvasManager: heishiObtainedCardsGrid_Playableが未設定！"); return; }
 
-        ClearGrid(genjiObtainedCardsGrid_Playable);
-        ClearGrid(heishiObtainedCardsGrid_Playable);
-
-        // ★↓ここから修正↓★
         // 源氏軍の獲得札リストを取得して表示
-        List<SelectableWordEntry> genjiCardsList = WordDataManager.Instance.GenjiSelectedCards; // ★変数名を genjiCardsList に変更（より明確に）★
-
+        List<SelectableWordEntry> genjiCardsList = WordDataManager.Instance.GenjiSelectedCards;
+        if (genjiCardsList != null && genjiCardsList.Count > 0)
         {
-            StringBuilder genjiTextBuilder = new StringBuilder("源氏軍 獲得札：\n");
-            if (genjiCardsList != null && genjiCardsList.Count > 0)
+            //Debug.Log($"PlayableCanvasManager: 源氏軍の獲得札 {genjiCardsList.Count}枚を表示します。");
+            foreach (SelectableWordEntry cardEntry in genjiCardsList)
             {
-                Debug.Log($"PlayableCanvasManager: 源氏軍の獲得札 {genjiCardsList.Count}枚を表示します。");
-                foreach (SelectableWordEntry cardEntry in genjiCardsList)
-                {
-                    CreateCardOnGrid(cardEntry, genjiObtainedCardsGrid_Playable); // グリッドに札を生成
-                    genjiTextBuilder.AppendLine($"{cardEntry.DisplayNumber}: {cardEntry.Word}"); // テキスト表示用に情報を追加
-                }
+                CreateCardOnGrid(cardEntry, genjiObtainedCardsGrid_Playable);
             }
-            else
-            {
-                genjiTextBuilder.AppendLine("(まだありません)");
-            }
+        }
+        else
+        {
+            Debug.Log("PlayableCanvasManager: 表示する源氏軍の札はありません。");
         }
 
         // 平氏軍の獲得札リストを取得して表示
-        List<SelectableWordEntry> heishiCardsList = WordDataManager.Instance.HeishiSelectedCards; // ★変数名を heishiCardsList に変更★
+        List<SelectableWordEntry> heishiCardsList = WordDataManager.Instance.HeishiSelectedCards;
+        if (heishiCardsList != null && heishiCardsList.Count > 0)
         {
-            StringBuilder heishiTextBuilder = new StringBuilder("平氏軍 獲得札：\n");
-            if (heishiCardsList != null && heishiCardsList.Count > 0)
+            //Debug.Log($"PlayableCanvasManager: 平氏軍の獲得札 {heishiCardsList.Count}枚を表示します。");
+            foreach (SelectableWordEntry cardEntry in heishiCardsList)
             {
-                Debug.Log($"PlayableCanvasManager: 平氏軍の獲得札 {heishiCardsList.Count}枚を表示します。");
-                foreach (SelectableWordEntry cardEntry in heishiCardsList)
-                {
-                    CreateCardOnGrid(cardEntry, heishiObtainedCardsGrid_Playable); // グリッドに札を生成
-                    heishiTextBuilder.AppendLine($"{cardEntry.DisplayNumber}: {cardEntry.Word}"); // テキスト表示用に情報を追加
-                }
-            }
-            else
-            {
-                heishiTextBuilder.AppendLine("(まだありません)");
+                CreateCardOnGrid(cardEntry, heishiObtainedCardsGrid_Playable);
             }
         }
-        // ★↓ここから空札を表示する処理を追加↓★
-        if (emptyCardsGrid_Playable != null) // 空札表示用のグリッドが設定されていれば
+        else
         {
-            ClearGrid(emptyCardsGrid_Playable); // まず既存の空札表示をクリア
+            Debug.Log("PlayableCanvasManager: 表示する平氏軍の札はありません。");
+        }
+
+        // 空札リストを取得して表示
+        if (emptyCardsGrid_Playable != null)
+        {
             List<SelectableWordEntry> emptyCards = WordDataManager.Instance.EmptyCardsList;
             if (emptyCards != null && emptyCards.Count > 0)
             {
                 Debug.Log($"PlayableCanvasManager: 空札 {emptyCards.Count}枚を表示します。");
                 foreach (SelectableWordEntry cardEntry in emptyCards)
                 {
-                    // 空札も同じプレハブを使い、色はデフォルトのまま、クリック不可で表示
                     CreateCardOnGrid(cardEntry, emptyCardsGrid_Playable);
-                    // もし、空札だけ特別な色（例えば灰色）にしたい場合は、
-                    // CreateCardOnGrid 関数の引数を増やすか、
-                    // あるいは WordCardUI に SetEmptyCardAppearance() のような関数を作って呼び出す
                 }
             }
             else
@@ -133,11 +95,58 @@ public class PlayableCanvasManager : MonoBehaviour
                 Debug.Log("PlayableCanvasManager: 表示する空札はありません。");
             }
         }
-        // ★↑ここまで↑★
-        // ★↑ここまで修正↑★
-        Debug.Log("PlayableCanvasManager: 獲得札の表示処理が完了しました。");
+        Debug.Log("PlayableCanvasManager: 最新の状態で札の表示処理が完了しました。");
+    }
+public WordCardUI FindWordCardByWord(string wordToFind)
+{
+    if (string.IsNullOrEmpty(wordToFind)) return null;
+
+    // 源氏軍の札グリッドから探す
+    if (genjiObtainedCardsGrid_Playable != null)
+    {
+        foreach (Transform childCardTransform in genjiObtainedCardsGrid_Playable)
+        {
+            WordCardUI cardUI = childCardTransform.GetComponent<WordCardUI>();
+            if (cardUI != null && cardUI.GetWord() == wordToFind)
+            {
+                Debug.Log($"[PlayableCanvasManager] 源氏軍の札から「{wordToFind}」の WordCardUI を見つけました。");
+                return cardUI;
+            }
+        }
     }
 
+    // 平氏軍の札グリッドから探す
+    if (heishiObtainedCardsGrid_Playable != null)
+    {
+        foreach (Transform childCardTransform in heishiObtainedCardsGrid_Playable)
+        {
+            WordCardUI cardUI = childCardTransform.GetComponent<WordCardUI>();
+            if (cardUI != null && cardUI.GetWord() == wordToFind)
+            {
+                Debug.Log($"[PlayableCanvasManager] 平氏軍の札から「{wordToFind}」の WordCardUI を見つけました。");
+                return cardUI;
+            }
+        }
+    }
+
+    // 空札グリッドからも探す（もし空札も拡大表示の対象になるなら）
+    if (emptyCardsGrid_Playable != null)
+    {
+        foreach (Transform childCardTransform in emptyCardsGrid_Playable)
+        {
+            WordCardUI cardUI = childCardTransform.GetComponent<WordCardUI>();
+            if (cardUI != null && cardUI.GetWord() == wordToFind)
+            {
+                Debug.Log($"[PlayableCanvasManager] 空札から「{wordToFind}」の WordCardUI を見つけました。");
+                return cardUI;
+            }
+        }
+    }
+
+    Debug.LogWarning($"[PlayableCanvasManager] ワード「{wordToFind}」に一致する WordCardUI が見つかりませんでした。");
+    return null; // 見つからなかった場合
+}
+    
     void ClearGrid(Transform gridParent)
     {
         if (gridParent == null) return;
@@ -176,7 +185,7 @@ public class PlayableCanvasManager : MonoBehaviour
         }
         else
         {
-            Debug.LogError($"生成した札 ({newCardObject.name}) にWordCardUIスクリプトなし！");
+            //Debug.LogError($"生成した札 ({newCardObject.name}) にWordCardUIスクリプトなし！");
         }
     }
         void DisplayPlayerNames()
@@ -208,7 +217,7 @@ public class PlayableCanvasManager : MonoBehaviour
                     }
                 }
             }
-            Debug.Log($"PlayableCanvasManager: 源氏軍のプレイヤー名表示を更新しました。参加人数: {WordDataManager.Instance.GenjiPlayerCount}人");
+            //Debug.Log($"PlayableCanvasManager: 源氏軍のプレイヤー名表示を更新しました。参加人数: {WordDataManager.Instance.GenjiPlayerCount}人");
         }
         else
         {
@@ -233,7 +242,7 @@ public class PlayableCanvasManager : MonoBehaviour
                     }
                 }
             }
-            Debug.Log($"PlayableCanvasManager: 平氏軍のプレイヤー名表示を更新しました。参加人数: {WordDataManager.Instance.HeishiPlayerCount}人");
+            //Debug.Log($"PlayableCanvasManager: 平氏軍のプレイヤー名表示を更新しました。参加人数: {WordDataManager.Instance.HeishiPlayerCount}人");
         }
         else
         {
