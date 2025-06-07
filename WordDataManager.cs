@@ -33,9 +33,6 @@ public struct SelectableWordEntry
         Word = word;
     }
 }
-
-
-
 public class WordDataManager : MonoBehaviour
 {
     public List<SelectableWordEntry> SelectableWordsList { get; private set; } = new List<SelectableWordEntry>();
@@ -227,14 +224,111 @@ public class WordDataManager : MonoBehaviour
         // 確認用ログ
         // foreach(var emptyCard in EmptyCardsList) { Debug.Log($"空札: {emptyCard.DisplayNumber}:{emptyCard.Word}"); }
     }
-// --- ここからダミーメソッド ---
-public void RestoreAllCardStates(object genjiCardsState, object heishiCardsState, object emptyCardsState) { }
-public void RemoveCardFromGenjiList(object card) { }
-public void RemoveCardFromHeishiList(object card) { }
-public void RemoveCardFromEmptyList(object card) { }
-public bool RemoveSpecificCardFromTeam(int teamIndex, int cardIndex,int TeamInitial) { return true; }
-// --- ここまでダミーメソッド ---
+    // --- ここからダミーメソッド ---
+    public void RestoreAllCardStates(object genjiCardsState, object heishiCardsState, object emptyCardsState) { }
+    public bool RemoveCardFromGenjiList(int index) // ★戻り値を bool に変更★
+    {
+        if (GenjiSelectedCards != null && index >= 0 && index < GenjiSelectedCards.Count)
+        {
+            string removedWord = GenjiSelectedCards[index].Word; // ログ用に名前を覚えておく
+            string removedNumber = GenjiSelectedCards[index].DisplayNumber;
+            GenjiSelectedCards.RemoveAt(index);
+            Debug.Log($"WordDataManager: 源氏軍の札「{removedWord}」(番号:{removedNumber}) をリストから削除しました。残り: {GenjiSelectedCards.Count}枚");
+            return true; // ★削除成功なので true を返す★
+        }
+        else
+        {
+            Debug.LogWarning($"WordDataManager: 源氏軍リストからの札削除に失敗。無効なインデックス: {index}");
+            return false; // ★削除失敗なので false を返す★
+        }
+    }
+    public bool RemoveCardFromHeishiList(int index) // ★戻り値を bool に変更★
+    {
+        if (HeishiSelectedCards != null && index >= 0 && index < HeishiSelectedCards.Count)
+        {
+            string removedWord = HeishiSelectedCards[index].Word;
+            string removedNumber = HeishiSelectedCards[index].DisplayNumber;
+            HeishiSelectedCards.RemoveAt(index);
+            Debug.Log($"WordDataManager: 平氏軍の札「{removedWord}」(番号:{removedNumber}) をリストから削除しました。残り: {HeishiSelectedCards.Count}枚");
+            return true; // ★削除成功なので true を返す★
+        }
+        else
+        {
+            Debug.LogWarning($"WordDataManager: 平氏軍リストからの札削除に失敗。無効なインデックス: {index}");
+            return false; // ★削除失敗なので false を返す★
+        }
+    }
+    public bool RemoveCardFromEmptyList(int index) // ★引数を int index に、戻り値を bool に変更★
+    {
+        if (EmptyCardsList != null && index >= 0 && index < EmptyCardsList.Count)
+        {
+            string removedWord = EmptyCardsList[index].Word; // ログ用に名前を覚えておく
+            string removedNumber = EmptyCardsList[index].DisplayNumber;
+            EmptyCardsList.RemoveAt(index);
+            Debug.Log($"WordDataManager: 空札「{removedWord}」(番号:{removedNumber}) をリストから削除しました。残り: {EmptyCardsList.Count}枚");
+            return true; // ★削除成功なので true を返す★
+        }
+        else
+        {
+            Debug.LogWarning($"WordDataManager: 空札リストからの札削除に失敗。無効なインデックス: {index}");
+            return false; // ★削除失敗なので false を返す★
+        }
+    }
+    public bool RemoveSpecificCardFromTeam(string teamInitial, SelectableWordEntry cardToRemove)
+    {
+        if (string.IsNullOrEmpty(cardToRemove.Word)) // 無効なカードデータなら何もしない
+        {
+            Debug.LogWarning($"[WordDataManager.RemoveSpecific] 削除対象のカードデータが無効です (Wordがnullまたは空)。");
+            return false;
+        }
 
+        List<SelectableWordEntry> targetList = null;
+        string teamNameForLog = "";
 
+        if (teamInitial == "A")
+        {
+            targetList = GenjiSelectedCards;
+            teamNameForLog = "源氏軍";
+        }
+        else if (teamInitial == "B")
+        {
+            targetList = HeishiSelectedCards;
+            teamNameForLog = "平氏軍";
+        }
+        else
+        {
+            Debug.LogError($"[WordDataManager.RemoveSpecific] 無効な teamInitial「{teamInitial}」が指定されました。");
+            return false;
+        }
+
+        if (targetList == null)
+        {
+            Debug.LogError($"[WordDataManager.RemoveSpecific] {teamNameForLog}の札リスト(targetList)がnullです。");
+            return false;
+        }
+
+        // DisplayNumber と Word の両方が一致する最初の要素を探す
+        int indexToRemove = -1;
+        for (int i = 0; i < targetList.Count; i++)
+        {
+            if (targetList[i].DisplayNumber == cardToRemove.DisplayNumber && targetList[i].Word == cardToRemove.Word)
+            {
+                indexToRemove = i;
+                break;
+            }
+        }
+
+        if (indexToRemove != -1)
+        {
+            targetList.RemoveAt(indexToRemove);
+            Debug.Log($"[WordDataManager.RemoveSpecific] {teamNameForLog}のリストから札「{cardToRemove.Word}」(番号:{cardToRemove.DisplayNumber}) を削除しました。残り: {targetList.Count}枚");
+            return true;
+        }
+        else
+        {
+            Debug.LogWarning($"[WordDataManager.RemoveSpecific] {teamNameForLog}のリストに札「{cardToRemove.Word}」(番号:{cardToRemove.DisplayNumber}) が見つかりませんでした。削除できませんでした。");
+            return false;
+        }
+    }
 
 }
