@@ -87,12 +87,12 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHand
         {
             originalBackgroundColor = cardBackgroundImage.color; // ★初期の背景色を記憶★
         }
-        animator = GetComponent<Animator>();
+        //animator = GetComponent<Animator>();
 
-        if (animator == null)
-        {
-            Debug.LogWarning($"WordCardUI ({gameObject.name}): Animatorコンポーネントが見つかりません。");
-        }
+        //if (animator == null)
+        //{
+        //    Debug.LogWarning($"WordCardUI ({gameObject.name}): Animatorコンポーネントが見つかりません。");
+        //}
         quizPhaseManager = FindObjectOfType<QuizPhaseManager>();
         if (quizPhaseManager == null)
         {
@@ -298,8 +298,6 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHand
         Vector3 originalScale = transform.localScale;
         Vector3 targetScale = originalScale * targetScaleFactor;
         Vector3 originalPosition = transform.localPosition;
-        // 今回の「正解札の拡大表示」では、まず「その場で拡大」を試みるので、目標位置は現在の位置のままです。
-        // 「画面中央へ移動」は、この後のステップで targetPositionScreenSpace を使って調整します。
         Vector3 targetPositionLocal = originalPosition;
 
         // ★★★ ソート順変更処理（アニメーション開始時）★★★
@@ -364,10 +362,9 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHand
         Debug.Log($"[WordCardUI:{gameObject.name}] PlayReturnToNormalAnimation の AnimateCardReturnToNormal が完了しました。");
     }
 
-    // ★★★↓新しいコルーチンメソッドをここに追加します↓★★★
     private IEnumerator AnimateCardReturnToNormal(float duration)
     {
-        Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardReturnToNormal コルーチン開始。目標スケール: {initialScale}, 目標位置: (元の位置), 時間: {duration}秒");
+        Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardReturnToNormal コルーチン開始。目標スケール: {initialScale}, 時間: {duration}秒");
 
         Vector3 currentScale = transform.localScale;
         // Vector3 currentPosition = transform.localPosition; // 位置もアニメートする場合
@@ -376,7 +373,12 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHand
         if (cardCanvas != null)
         {
             cardCanvas.sortingOrder = originalSortOrder;
-
+            // overrideSortingをfalseに戻すことで、Canvasのソート順が親に依存するようになります。
+            // チームに選択されていない通常の札は、falseに戻すのが安全です。
+            if (!isTeamSelected)
+            {
+                cardCanvas.overrideSorting = false;
+            }
             Debug.Log($"[WordCardUI:{gameObject.name}] ソート順を基準値 {originalSortOrder} に戻しました。");
         }
 
@@ -395,7 +397,7 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHand
                                              // transform.localPosition = originalGridPosition; // 確実に元の位置に
 
         Debug.Log($"[WordCardUI:{gameObject.name}] AnimateCardReturnToNormal 完了。スケール: {transform.localScale}");
-        yield break; // コルーチンの終わりを明確に
+        yield break;
     }
 
     public void SetSelectedForOkurifuda(bool isSelected)
@@ -522,6 +524,46 @@ public class WordCardUI : MonoBehaviour, IPointerClickHandler, IPointerEnterHand
         cardBackgroundImage.color = Color.yellow;
         isConfirmedForOkurifuda = true; // ★この行を追加★
 
+    }
+
+    public IEnumerator PlayFadeOutAndDeactivateAnimation(float duration) // 戻り値をIEnumeratorに、引数に時間を追加
+    {
+        Debug.Log($"[WordCardUI:{gameObject.name}] PlayFadeOutAndDeactivateAnimation が呼ばれました。時間: {duration}秒");
+
+        // 必要なコンポーネントがあるか確認
+        CanvasGroup canvasGroup = GetComponent<CanvasGroup>();
+        if (canvasGroup == null)
+        {
+            Debug.LogError($"[WordCardUI:{gameObject.name}] CanvasGroupコンポーネントが見つかりません！フェードアウトできません。代わりに即座に非表示にします。");
+            gameObject.SetActive(false);
+            yield break; // コルーチンを終了
+        }
+
+        // 新しいコルーチンを開始し、その完了を待つ
+        yield return StartCoroutine(AnimateFadeOutAndDeactivate(duration, canvasGroup));
+
+        Debug.Log($"[WordCardUI:{gameObject.name}] PlayFadeOutAndDeactivateAnimation の AnimateFadeOutAndDeactivate が完了しました。");
+    }
+
+    private IEnumerator AnimateFadeOutAndDeactivate(float duration, CanvasGroup canvasGroup)
+    {
+        Debug.Log($"[WordCardUI:{gameObject.name}] AnimateFadeOutAndDeactivate コルーチン開始。時間: {duration}秒");
+
+        float startAlpha = canvasGroup.alpha; // 現在のアルファ値から開始
+        float elapsedTime = 0f;
+
+        while (elapsedTime < duration)
+        {
+            elapsedTime += Time.deltaTime;
+            canvasGroup.alpha = Mathf.Lerp(startAlpha, 0f, elapsedTime / duration); // 徐々にアルファを0に
+            yield return null;
+        }
+
+        canvasGroup.alpha = 0; // 確実にアルファを0に
+        gameObject.SetActive(false); // 完全に透明になったら、GameObjectを非アクティブにする
+
+        Debug.Log($"[WordCardUI:{gameObject.name}] AnimateFadeOutAndDeactivate 完了。GameObjectを非アクティブにしました。");
+        yield break;
     }
 
 }
