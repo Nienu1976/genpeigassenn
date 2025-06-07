@@ -33,7 +33,7 @@ public class WordSelectionManager : MonoBehaviour
     private int cardsSelectedByHeishi = 0;
 
     //private const int CARDS_TO_SELECT_PER_TEAM = 45;
-    private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 10; // この枚数に達したら残りをロック
+    private const int TOTAL_CARDS_TO_TRIGGER_LOCK = 4; // この枚数に達したら残りをロック
 
 
     [Header("取得枚数表示UI")]
@@ -65,12 +65,6 @@ public class WordSelectionManager : MonoBehaviour
 
 
     // ★↓ここから新しい変数を「正しく」追加します↓★
-
-
-    void OnEnable()
-    {
-        InitializeAndDisplayCards();
-    }
 
     public void InitializeAndDisplayCards()
     {
@@ -298,7 +292,7 @@ public class WordSelectionManager : MonoBehaviour
     {
         if (overallTurnTextDisplay != null)
         {
-            overallTurnTextDisplay.text = (currentPlayerTurnTeamIndex == 0) ? "源氏軍選択ターン" : "平氏軍選択ターン";
+            overallTurnTextDisplay.text = (currentPlayerTurnTeamIndex == 0) ? "源氏軍札選択順" : "平氏軍札選択順";
             overallTurnTextDisplay.color = (currentPlayerTurnTeamIndex == 0) ? genjiTeamColor : heishiTeamColor;
         }
     }
